@@ -54,6 +54,8 @@
 	  <div>Signal: <span id="signal" class="pill"></span></div>
   <div>Last connected: <span id="lastconn">—</span></div>
     <div>Last seen: <span id="lastseen">—</span></div>
+	  <div>Wi-Fi: <span id="rssiNow">—</span></div>
+
 
 
   </div>
@@ -115,6 +117,14 @@ function renderChart(rows) {
     chart.update('none');
   }
 }
+function rssiLabel(dbm) {
+  if (dbm >= -60) return 'Excellent';
+  if (dbm >= -67) return 'Very good';
+  if (dbm >= -75) return 'Good';
+  if (dbm >= -82) return 'Fair';
+  if (dbm >= -90) return 'Poor';
+  return 'Very poor';
+}
 
 
     const rangeSel = document.getElementById('range');
@@ -124,6 +134,7 @@ function renderChart(rows) {
 	const signalEl = document.getElementById('signal');
 	const lastConnEl = document.getElementById('lastconn');
 const lastSeenEl = document.getElementById('lastseen');
+const rssiNowEl = document.getElementById('rssiNow');
 
     const statusEl = document.getElementById('status');
 	const authEl = document.getElementById('auth');
@@ -184,6 +195,14 @@ const signoutBtn = document.getElementById('signout');
     } else {
       lastConnEl.textContent = '—';
       lastSeenEl.textContent = '—';
+    }
+    // Show Wi-Fi strength (avg of last up to 5 readings)
+    const recent = data.filter(r => r.rssi !== null && r.rssi !== undefined).slice(0, 5);
+    if (recent.length) {
+      const avg = recent.reduce((s, r) => s + Number(r.rssi), 0) / recent.length;
+      rssiNowEl.textContent = `${avg.toFixed(0)} dBm (${rssiLabel(avg)})`;
+    } else {
+      rssiNowEl.textContent = '—';
     }
 
       } else {
