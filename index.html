@@ -125,6 +125,11 @@ function rssiLabel(dbm) {
   if (dbm >= -90) return 'Poor';
   return 'Very poor';
 }
+function isRecent(tsIso, seconds) {
+  if (!tsIso) return false;
+  const ageMs = Date.now() - new Date(tsIso).getTime();
+  return ageMs <= seconds * 1000;
+}
 
 
     const rangeSel = document.getElementById('range');
@@ -196,14 +201,19 @@ const signoutBtn = document.getElementById('signout');
       lastConnEl.textContent = '—';
       lastSeenEl.textContent = '—';
     }
-    // Show Wi-Fi strength (avg of last up to 5 readings)
-    const recent = data.filter(r => r.rssi !== null && r.rssi !== undefined).slice(0, 5);
-    if (recent.length) {
-      const avg = recent.reduce((s, r) => s + Number(r.rssi), 0) / recent.length;
+       // Wi-Fi: only show if device is recently seen AND RSSI readings are fresh (≤2 min)
+    const onlineRecent = ds && isRecent(ds.last_seen_ts, 120); // 2 minutes
+    const freshRows = data
+      .filter(r => r.rssi != null && isRecent(r.ts, 120))
+      .slice(0, 5);
+
+    if (onlineRecent && freshRows.length) {
+      const avg = freshRows.reduce((s, r) => s + Number(r.rssi), 0) / freshRows.length;
       rssiNowEl.textContent = `${avg.toFixed(0)} dBm (${rssiLabel(avg)})`;
     } else {
-      rssiNowEl.textContent = '—';
+      rssiNowEl.textContent = 'No signal';
     }
+
 
       } else {
         latestEl.textContent = '—';
