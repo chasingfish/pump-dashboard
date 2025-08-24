@@ -124,6 +124,13 @@
         return { A, B };
       } catch { return { A:null, B:null }; }
     }
+    function latestNonNull(data, selector) {
+      for (const r of data) {
+        const v = selector(r);
+        if (v != null) return v;
+      }
+      return null;
+    }
 
     const rangeSel  = document.getElementById('range');
     const rowsEl    = document.getElementById('rows');
@@ -145,8 +152,8 @@
     const signoutBtn= document.getElementById('signout');
 
     function renderStateChart(rows) {
-      const ordered = rows.slice().reverse(); // oldest → newest
-      const labels = ordered.map(r => new Date(r.ts).toLocaleTimeString());
+      const ordered = rows.slice().reverse();
+      const labels = ordered.map(r => new Date(r.ts).toLocaleTimeString()); // strings (category scale)
       const values = ordered.map(r => r.uv_status === 'GREEN' ? 1 : 0);
       const ctx = document.getElementById('chartState').getContext('2d');
       if (!chartState) {
@@ -164,49 +171,38 @@
     }
 
     function renderTempCharts(rows) {
-      // Build time series for A and B by parsing the raw JSON payload in each row
-      const ordered = rows.slice().reverse(); // oldest → newest
-      const labels = ordered.map(r => new Date(r.ts));
+      const ordered = rows.slice().reverse();
+      const labels = ordered.map(r => new Date(r.ts).toLocaleTimeString()); // strings (category scale)
       const seriesA = [];
       const seriesB = [];
-      const labelStrings = ordered.map(d => d.toLocaleTimeString());
-
       for (const r of ordered) {
         const { A, B } = parseRawTemps(r.raw);
         seriesA.push(A);
         seriesB.push(B);
       }
 
-      // Latest (from newest row that has a value)
-      const lastRow = rows[0] || null;
-      if (lastRow) {
-        const { A, B } = parseRawTemps(lastRow.raw);
-        latestAEl.textContent = (A != null) ? A.toFixed(2) : '—';
-        latestBEl.textContent = (B != null) ? B.toFixed(2) : '—';
-      } else {
-        latestAEl.textContent = '—';
-        latestBEl.textContent = '—';
-      }
+      // Latest A/B = first non-null in newest-first data
+      const latestA = latestNonNull(rows, r => parseRawTemps(r.raw).A);
+      const latestB = latestNonNull(rows, r => parseRawTemps(r.raw).B);
+      latestAEl.textContent = (latestA != null) ? latestA.toFixed(2) : '—';
+      latestBEl.textContent = (latestB != null) ? latestB.toFixed(2) : '—';
 
-      // Render / update Chart.js line charts
       const aCtx = document.getElementById('chartA').getContext('2d');
       const bCtx = document.getElementById('chartB').getContext('2d');
-
       const common = {
         type: 'line',
         options: {
           animation: false,
           plugins: { legend: { display: false } },
           scales: {
-            x: { ticks: { callback: (_, i) => labelStrings[i] } },
+            x: { ticks: { autoSkip: true, maxTicksLimit: 10 } },
             y: { title: { display: true, text: '°C' } }
           }
         }
       };
 
       if (!chartA) {
-        chartA = new Chart(aCtx, {
-          ...common,
+        chartA = new Chart(aCtx, { ...common,
           data: { labels, datasets: [{ data: seriesA, pointRadius: 0, borderWidth: 2, spanGaps: true, fill: false }] }
         });
       } else {
@@ -216,8 +212,7 @@
       }
 
       if (!chartB) {
-        chartB = new Chart(bCtx, {
-          ...common,
+        chartB = new Chart(bCtx, { ...common,
           data: { labels, datasets: [{ data: seriesB, pointRadius: 0, borderWidth: 2, spanGaps: true, fill: false }] }
         });
       } else {
@@ -227,14 +222,8 @@
       }
     }
 
-    function setSignalBad(msg) {
-      signalEl.textContent = msg;
-      signalEl.className = 'pill red';
-    }
-    function setSignalOk(msg) {
-      signalEl.textContent = msg;
-      signalEl.className = 'pill green';
-    }
+    function setSignalBad(msg) { signalEl.textContent = msg; signalEl.className = 'pill red'; }
+    function setSignalOk(msg) { signalEl.textContent = msg; signalEl.className = 'pill green'; }
 
     async function load() {
       // Only load when authenticated
@@ -247,7 +236,7 @@
       const hours = parseInt(rangeSel.value, 10);
       const fromIso = new Date(Date.now() - hours * 3600 * 1000).toISOString();
 
-      // IMPORTANT: pull 'raw' so we can parse temp_pump_a_c / temp_pump_b_c
+      // pull RAW so we can parse temp_pump_a_c / temp_pump_b_c
       const { data, error } = await sb
         .from('pump_readings')
         .select('device_id, ts, uv_status, temp_c, rssi, raw')
@@ -264,33 +253,29 @@
         latestEl.textContent = latest.uv_status;
         latestEl.className = 'pill ' + (latest.uv_status === 'GREEN' ? 'green' : 'red');
 
-        // Device status panel
         const did = latest.device_id;
         const { data: ds, error: dserr } = await sb
           .from('device_status')
           .select('last_seen_ts, last_online_ts, online')
           .eq('device_id', did)
           .single();
-
         if (!dserr && ds) {
           lastConnEl.textContent = ds.last_online_ts ? new Date(ds.last_online_ts).toLocaleString() : (ds.online ? 'now' : '—');
           lastSeenEl.textContent = ds.last_seen_ts ? new Date(ds.last_seen_ts).toLocaleString() : (ds.online ? 'now' : '—');
+          const onlineRecent = isRecent(ds.last_seen_ts, 120);
+          const freshRows = data.filter(r => r.rssi != null && isRecent(r.ts, 120)).slice(0, 5);
+          if (onlineRecent && freshRows.length) {
+            const avg = freshRows.reduce((s, r) => s + Number(r.rssi), 0) / freshRows.length;
+            rssiNowEl.textContent = `${avg.toFixed(0)} dBm (${rssiLabel(avg)})`;
+          } else {
+            rssiNowEl.textContent = 'No signal';
+          }
         } else {
           lastConnEl.textContent = '—';
           lastSeenEl.textContent = '—';
-        }
-
-        // Wi-Fi now (avg of fresh rows ≤2 min)
-        const onlineRecent = ds && isRecent(ds.last_seen_ts, 120);
-        const freshRows = data.filter(r => r.rssi != null && isRecent(r.ts, 120)).slice(0, 5);
-        if (onlineRecent && freshRows.length) {
-          const avg = freshRows.reduce((s, r) => s + Number(r.rssi), 0) / freshRows.length;
-          rssiNowEl.textContent = `${avg.toFixed(0)} dBm (${rssiLabel(avg)})`;
-        } else {
           rssiNowEl.textContent = 'No signal';
         }
 
-        // Signal freshness
         const ageMin = Math.floor((Date.now() - new Date(data[0].ts).getTime()) / 60000);
         if (ageMin <= 10) setSignalOk('OK'); else setSignalBad(`STALE: ${ageMin}m`);
 
@@ -300,7 +285,7 @@
         setSignalBad('NO DATA');
       }
 
-      // Table rows (with parsed A/B)
+      // Table rows with parsed A/B
       for (const r of data) {
         const { A, B } = parseRawTemps(r.raw);
         const tr = document.createElement('tr');
@@ -315,14 +300,12 @@
         rowsEl.appendChild(tr);
       }
 
-      // Charts
       renderStateChart(data);
       renderTempCharts(data);
 
       statusEl.textContent = 'Last updated: ' + new Date().toLocaleTimeString();
     }
 
-    // Auth UI & actions
     async function refreshAuthUI() {
       const { data: { session } } = await sb.auth.getSession();
       const authed = !!session;
