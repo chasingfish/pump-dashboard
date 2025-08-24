@@ -5,19 +5,24 @@
   <title>Pump Readings (MVP)</title>
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <style>
-    body { font: 14px/1.4 system-ui, sans-serif; margin: 20px; }
-    .row { display:flex; gap:10px; align-items:center; margin-bottom:12px; }
-    button { padding:8px 12px; }
+    body { font: 14px/1.4 system-ui, -apple-system, Segoe UI, Roboto, sans-serif; margin: 20px; color:#111; }
+    .row { display:flex; flex-wrap:wrap; gap:10px; align-items:center; margin-bottom:12px; }
+    button, select, input { padding:8px 10px; font: inherit; }
     table { border-collapse: collapse; width:100%; }
     th, td { border:1px solid #ddd; padding:8px; }
     th { background:#f7f7f7; text-align:left; }
-    .pill { padding:2px 8px; border-radius:12px; display:inline-block; }
-    .green { background:#e6f7ec; color:#156d2f; }
-    .red { background:#fde8e8; color:#9b1c1c; }
+    .pill { padding:2px 8px; border-radius:12px; display:inline-block; border:1px solid transparent; }
+    .green { background:#e6f7ec; color:#156d2f; border-color:#bde5c8; }
+    .red { background:#fde8e8; color:#9b1c1c; border-color:#f5c2c2; }
+    .muted { color:#666; }
+    .cards { display:grid; grid-template-columns: repeat(auto-fit,minmax(200px,1fr)); gap:12px; margin:10px 0 18px; }
+    .card { border:1px solid #e5e5e5; border-radius:10px; padding:10px 12px; background:#fff; }
+    .k { font-size:12px; color:#555; }
+    .v { font-weight:600; }
+    canvas { max-width:100%; background:#fff; border:1px solid #eee; border-radius:10px; padding:6px; }
   </style>
 </head>
-
-  <body>
+<body>
 
   <!-- Auth panel (hidden when signed in) -->
   <div id="auth" style="margin-bottom:16px; display:none;">
@@ -32,41 +37,59 @@
 
   <!-- App content (hidden until signed in) -->
   <div id="app" style="display:none;">
-  <h1>Pump Readings (MVP)</h1>
+    <h1>Pump Readings (MVP)</h1>
 
+    <div class="row">
+      <label>Time range:</label>
+      <select id="range">
+        <option value="6">Last 6 hours</option>
+        <option value="24" selected>Last 24 hours</option>
+        <option value="168">Last 7 days</option>
+      </select>
+      <button id="refresh">Refresh</button>
+      <div id="status" class="muted"></div>
+      <button id="signout" title="Sign out of this browser">Sign out</button>
+    </div>
 
-  <div class="row">
-    <label>Time range:</label>
-    <select id="range">
-      <option value="6">Last 6 hours</option>
-      <option value="24" selected>Last 24 hours</option>
-      <option value="168">Last 7 days</option>
-    </select>
-    <button id="refresh">Refresh</button>
-    <div id="status"></div>
-	    <button id="signout" title="Sign out of this browser">Sign out</button>
+    <div class="cards">
+      <div class="card"><div class="k">Latest status</div><div id="latest" class="pill">—</div></div>
+      <div class="card"><div class="k">Rows</div><div id="count" class="v">0</div></div>
+      <div class="card"><div class="k">Signal health</div><div id="signal" class="pill">—</div></div>
+      <div class="card"><div class="k">Last connected</div><div id="lastconn" class="v">—</div></div>
+      <div class="card"><div class="k">Last seen</div><div id="lastseen" class="v">—</div></div>
+      <div class="card"><div class="k">Wi-Fi now</div><div id="rssiNow" class="v">—</div></div>
+      <div class="card"><div class="k">Latest Temp A (°C)</div><div id="latestA" class="v">—</div></div>
+      <div class="card"><div class="k">Latest Temp B (°C)</div><div id="latestB" class="v">—</div></div>
+    </div>
 
-  </div>
+    <h3>State (GREEN/RED)</h3>
+    <canvas id="chartState" height="140"></canvas>
 
-  <div class="row">
-    <div>Latest: <span id="latest" class="pill"></span></div>
-    <div>Total rows: <strong id="count">0</strong></div>
-	  <div>Signal: <span id="signal" class="pill"></span></div>
-  <div>Last connected: <span id="lastconn">—</span></div>
-    <div>Last seen: <span id="lastseen">—</span></div>
-	  <div>Wi-Fi: <span id="rssiNow">—</span></div>
+    <div class="row" style="gap:20px; width:100%; margin-top:16px;">
+      <div style="flex:1; min-width:260px;">
+        <h3>Temp A (°C)</h3>
+        <canvas id="chartA" height="160"></canvas>
+      </div>
+      <div style="flex:1; min-width:260px;">
+        <h3>Temp B (°C)</h3>
+        <canvas id="chartB" height="160"></canvas>
+      </div>
+    </div>
 
-
-
-  </div>
-<canvas id="chart" height="140"></canvas>
-
-  <table>
-    <thead>
-      <tr><th>Time (UTC)</th><th>Device</th><th>Status</th><th>Temp °C</th><th>RSSI</th></tr>
-    </thead>
-    <tbody id="rows"></tbody>
-  </table>
+    <h3 style="margin-top:18px;">Recent rows</h3>
+    <table>
+      <thead>
+        <tr>
+          <th>Time (UTC)</th>
+          <th>Device</th>
+          <th>Status</th>
+          <th>Temp A (°C)</th>
+          <th>Temp B (°C)</th>
+          <th>RSSI</th>
+        </tr>
+      </thead>
+      <tbody id="rows"></tbody>
+    </table>
   </div> <!-- /#app -->
 
   <script src="https://unpkg.com/@supabase/supabase-js@2"></script>
@@ -77,102 +100,162 @@
     const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im9qb21jY2l1bnVzZW13c3pkbnJsIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTQ3MTUyODYsImV4cCI6MjA3MDI5MTI4Nn0.U7gKI4QOklKkSq_Jbfxm6hQBrvS4JipV7z6KtIl1kz8";
 
     const sb = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
-let chart;
+    let chartState, chartA, chartB;
 
-function renderChart(rows) {
-  // Build labels (times) and values (1 for GREEN, 0 for RED)
-  const ordered = rows.slice().reverse(); // oldest → newest
-  const labels = ordered.map(r => new Date(r.ts).toLocaleTimeString());
-  const values = ordered.map(r => r.uv_status === 'GREEN' ? 1 : 0);
+    function rssiLabel(dbm) {
+      if (dbm >= -60) return 'Excellent';
+      if (dbm >= -67) return 'Very good';
+      if (dbm >= -75) return 'Good';
+      if (dbm >= -82) return 'Fair';
+      if (dbm >= -90) return 'Poor';
+      return 'Very poor';
+    }
+    function isRecent(tsIso, seconds) {
+      if (!tsIso) return false;
+      const ageMs = Date.now() - new Date(tsIso).getTime();
+      return ageMs <= seconds * 1000;
+    }
+    function parseRawTemps(raw) {
+      if (!raw) return { A:null, B:null };
+      try {
+        const obj = (typeof raw === 'string') ? JSON.parse(raw) : raw;
+        const A = (obj.temp_pump_a_c != null && !Number.isNaN(obj.temp_pump_a_c)) ? Number(obj.temp_pump_a_c) : null;
+        const B = (obj.temp_pump_b_c != null && !Number.isNaN(obj.temp_pump_b_c)) ? Number(obj.temp_pump_b_c) : null;
+        return { A, B };
+      } catch { return { A:null, B:null }; }
+    }
 
-  const ctx = document.getElementById('chart').getContext('2d');
+    const rangeSel  = document.getElementById('range');
+    const rowsEl    = document.getElementById('rows');
+    const latestEl  = document.getElementById('latest');
+    const countEl   = document.getElementById('count');
+    const signalEl  = document.getElementById('signal');
+    const lastConnEl= document.getElementById('lastconn');
+    const lastSeenEl= document.getElementById('lastseen');
+    const rssiNowEl = document.getElementById('rssiNow');
+    const latestAEl = document.getElementById('latestA');
+    const latestBEl = document.getElementById('latestB');
+    const statusEl  = document.getElementById('status');
+    const authEl    = document.getElementById('auth');
+    const appEl     = document.getElementById('app');
+    const emailEl   = document.getElementById('email');
+    const passwordEl= document.getElementById('password');
+    const signinBtn = document.getElementById('signin');
+    const authMsgEl = document.getElementById('authMsg');
+    const signoutBtn= document.getElementById('signout');
 
-  if (!chart) {
-    chart = new Chart(ctx, {
-      type: 'line',
-      data: {
-        labels,
-        datasets: [{
-          data: values,
-          stepped: true,
-          pointRadius: 0,
-          borderWidth: 2,
-          fill: false
-        }]
-      },
-      options: {
-        animation: false,
-        plugins: { legend: { display: false } },
-        scales: {
-          y: {
-            min: -0.1, max: 1.1,
-            ticks: { callback: v => (v === 1 ? 'GREEN' : v === 0 ? 'RED' : '') }
+    function renderStateChart(rows) {
+      const ordered = rows.slice().reverse(); // oldest → newest
+      const labels = ordered.map(r => new Date(r.ts).toLocaleTimeString());
+      const values = ordered.map(r => r.uv_status === 'GREEN' ? 1 : 0);
+      const ctx = document.getElementById('chartState').getContext('2d');
+      if (!chartState) {
+        chartState = new Chart(ctx, {
+          type: 'line',
+          data: { labels, datasets: [{ data: values, stepped: true, pointRadius: 0, borderWidth: 2, fill: false }] },
+          options: { animation: false, plugins: { legend: { display: false } },
+            scales: { y: { min: -0.1, max: 1.1, ticks: { callback: v => (v === 1 ? 'GREEN' : v === 0 ? 'RED' : '') } } } }
+        });
+      } else {
+        chartState.data.labels = labels;
+        chartState.data.datasets[0].data = values;
+        chartState.update('none');
+      }
+    }
+
+    function renderTempCharts(rows) {
+      // Build time series for A and B by parsing the raw JSON payload in each row
+      const ordered = rows.slice().reverse(); // oldest → newest
+      const labels = ordered.map(r => new Date(r.ts));
+      const seriesA = [];
+      const seriesB = [];
+      const labelStrings = ordered.map(d => d.toLocaleTimeString());
+
+      for (const r of ordered) {
+        const { A, B } = parseRawTemps(r.raw);
+        seriesA.push(A);
+        seriesB.push(B);
+      }
+
+      // Latest (from newest row that has a value)
+      const lastRow = rows[0] || null;
+      if (lastRow) {
+        const { A, B } = parseRawTemps(lastRow.raw);
+        latestAEl.textContent = (A != null) ? A.toFixed(2) : '—';
+        latestBEl.textContent = (B != null) ? B.toFixed(2) : '—';
+      } else {
+        latestAEl.textContent = '—';
+        latestBEl.textContent = '—';
+      }
+
+      // Render / update Chart.js line charts
+      const aCtx = document.getElementById('chartA').getContext('2d');
+      const bCtx = document.getElementById('chartB').getContext('2d');
+
+      const common = {
+        type: 'line',
+        options: {
+          animation: false,
+          plugins: { legend: { display: false } },
+          scales: {
+            x: { ticks: { callback: (_, i) => labelStrings[i] } },
+            y: { title: { display: true, text: '°C' } }
           }
         }
+      };
+
+      if (!chartA) {
+        chartA = new Chart(aCtx, {
+          ...common,
+          data: { labels, datasets: [{ data: seriesA, pointRadius: 0, borderWidth: 2, spanGaps: true, fill: false }] }
+        });
+      } else {
+        chartA.data.labels = labels;
+        chartA.data.datasets[0].data = seriesA;
+        chartA.update('none');
       }
-    });
-  } else {
-    chart.data.labels = labels;
-    chart.data.datasets[0].data = values;
-    chart.update('none');
-  }
-}
-function rssiLabel(dbm) {
-  if (dbm >= -60) return 'Excellent';
-  if (dbm >= -67) return 'Very good';
-  if (dbm >= -75) return 'Good';
-  if (dbm >= -82) return 'Fair';
-  if (dbm >= -90) return 'Poor';
-  return 'Very poor';
-}
-function isRecent(tsIso, seconds) {
-  if (!tsIso) return false;
-  const ageMs = Date.now() - new Date(tsIso).getTime();
-  return ageMs <= seconds * 1000;
-}
 
+      if (!chartB) {
+        chartB = new Chart(bCtx, {
+          ...common,
+          data: { labels, datasets: [{ data: seriesB, pointRadius: 0, borderWidth: 2, spanGaps: true, fill: false }] }
+        });
+      } else {
+        chartB.data.labels = labels;
+        chartB.data.datasets[0].data = seriesB;
+        chartB.update('none');
+      }
+    }
 
-    const rangeSel = document.getElementById('range');
-    const rowsEl = document.getElementById('rows');
-    const latestEl = document.getElementById('latest');
-    const countEl = document.getElementById('count');
-	const signalEl = document.getElementById('signal');
-	const lastConnEl = document.getElementById('lastconn');
-const lastSeenEl = document.getElementById('lastseen');
-const rssiNowEl = document.getElementById('rssiNow');
-
-    const statusEl = document.getElementById('status');
-	const authEl = document.getElementById('auth');
-const appEl = document.getElementById('app');
-const emailEl = document.getElementById('email');
-const passwordEl = document.getElementById('password');
-const signinBtn = document.getElementById('signin');
-const authMsgEl = document.getElementById('authMsg');
-const signoutBtn = document.getElementById('signout');
-
+    function setSignalBad(msg) {
+      signalEl.textContent = msg;
+      signalEl.className = 'pill red';
+    }
+    function setSignalOk(msg) {
+      signalEl.textContent = msg;
+      signalEl.className = 'pill green';
+    }
 
     async function load() {
-        // Only load when authenticated
-  const { data: { session } } = await sb.auth.getSession();
-  if (!session) return;
+      // Only load when authenticated
+      const { data: { session } } = await sb.auth.getSession();
+      if (!session) return;
 
-	  statusEl.textContent = 'Loading...';
+      statusEl.textContent = 'Loading...';
       rowsEl.innerHTML = '';
 
       const hours = parseInt(rangeSel.value, 10);
       const fromIso = new Date(Date.now() - hours * 3600 * 1000).toISOString();
 
+      // IMPORTANT: pull 'raw' so we can parse temp_pump_a_c / temp_pump_b_c
       const { data, error } = await sb
         .from('pump_readings')
-        .select('device_id, ts, uv_status, temp_c, rssi')
+        .select('device_id, ts, uv_status, temp_c, rssi, raw')
         .gte('ts', fromIso)
         .order('ts', { ascending: false })
-        .limit(500);
+        .limit(1000);
 
-      if (error) {
-        statusEl.textContent = 'Error: ' + error.message;
-        return;
-      }
+      if (error) { statusEl.textContent = 'Error: ' + error.message; return; }
 
       countEl.textContent = data.length;
 
@@ -180,109 +263,94 @@ const signoutBtn = document.getElementById('signout');
         const latest = data[0];
         latestEl.textContent = latest.uv_status;
         latestEl.className = 'pill ' + (latest.uv_status === 'GREEN' ? 'green' : 'red');
-		    // Fetch last connected time for this device
-    const did = latest.device_id;
-    const { data: ds, error: dserr } = await sb
-      .from('device_status')
-      .select('last_seen_ts, last_online_ts, online')
-      .eq('device_id', did)
-      .single();
-    if (!dserr && ds) {
-      // Last connected = last time the device came online (birth message)
-      lastConnEl.textContent = ds.last_online_ts
-        ? new Date(ds.last_online_ts).toLocaleString()
-        : (ds.online ? 'now' : '—');
 
-      // Last seen = most recent message seen by the subscriber (ticks regularly)
-      lastSeenEl.textContent = ds.last_seen_ts
-        ? new Date(ds.last_seen_ts).toLocaleString()
-        : (ds.online ? 'now' : '—');
-    } else {
-      lastConnEl.textContent = '—';
-      lastSeenEl.textContent = '—';
-    }
-       // Wi-Fi: only show if device is recently seen AND RSSI readings are fresh (≤2 min)
-    const onlineRecent = ds && isRecent(ds.last_seen_ts, 120); // 2 minutes
-    const freshRows = data
-      .filter(r => r.rssi != null && isRecent(r.ts, 120))
-      .slice(0, 5);
+        // Device status panel
+        const did = latest.device_id;
+        const { data: ds, error: dserr } = await sb
+          .from('device_status')
+          .select('last_seen_ts, last_online_ts, online')
+          .eq('device_id', did)
+          .single();
 
-    if (onlineRecent && freshRows.length) {
-      const avg = freshRows.reduce((s, r) => s + Number(r.rssi), 0) / freshRows.length;
-      rssiNowEl.textContent = `${avg.toFixed(0)} dBm (${rssiLabel(avg)})`;
-    } else {
-      rssiNowEl.textContent = 'No signal';
-    }
+        if (!dserr && ds) {
+          lastConnEl.textContent = ds.last_online_ts ? new Date(ds.last_online_ts).toLocaleString() : (ds.online ? 'now' : '—');
+          lastSeenEl.textContent = ds.last_seen_ts ? new Date(ds.last_seen_ts).toLocaleString() : (ds.online ? 'now' : '—');
+        } else {
+          lastConnEl.textContent = '—';
+          lastSeenEl.textContent = '—';
+        }
 
+        // Wi-Fi now (avg of fresh rows ≤2 min)
+        const onlineRecent = ds && isRecent(ds.last_seen_ts, 120);
+        const freshRows = data.filter(r => r.rssi != null && isRecent(r.ts, 120)).slice(0, 5);
+        if (onlineRecent && freshRows.length) {
+          const avg = freshRows.reduce((s, r) => s + Number(r.rssi), 0) / freshRows.length;
+          rssiNowEl.textContent = `${avg.toFixed(0)} dBm (${rssiLabel(avg)})`;
+        } else {
+          rssiNowEl.textContent = 'No signal';
+        }
+
+        // Signal freshness
+        const ageMin = Math.floor((Date.now() - new Date(data[0].ts).getTime()) / 60000);
+        if (ageMin <= 10) setSignalOk('OK'); else setSignalBad(`STALE: ${ageMin}m`);
 
       } else {
         latestEl.textContent = '—';
         latestEl.className = 'pill';
+        setSignalBad('NO DATA');
       }
 
+      // Table rows (with parsed A/B)
       for (const r of data) {
+        const { A, B } = parseRawTemps(r.raw);
         const tr = document.createElement('tr');
         tr.innerHTML = `
           <td>${new Date(r.ts).toISOString()}</td>
           <td>${r.device_id}</td>
           <td><span class="pill ${r.uv_status === 'GREEN' ? 'green' : 'red'}">${r.uv_status}</span></td>
-          <td>${r.temp_c ?? ''}</td>
+          <td>${A != null ? A.toFixed(2) : ''}</td>
+          <td>${B != null ? B.toFixed(2) : ''}</td>
           <td>${r.rssi ?? ''}</td>
         `;
         rowsEl.appendChild(tr);
-		
-
       }
-      renderChart(data);
 
-     statusEl.textContent = 'Last updated: ' + new Date().toLocaleTimeString();
-	 if (data.length) {
-  const ageMs  = Date.now() - new Date(data[0].ts).getTime();
-  const ageMin = Math.floor(ageMs / 60000);
-  const ok = ageMin <= 10;
-  signalEl.textContent = ok ? 'OK' : `STALE: ${ageMin}m`;
-  signalEl.className = 'pill ' + (ok ? 'green' : 'red');
-} else {
-  signalEl.textContent = 'NO DATA';
-  signalEl.className = 'pill red';
-}
+      // Charts
+      renderStateChart(data);
+      renderTempCharts(data);
 
+      statusEl.textContent = 'Last updated: ' + new Date().toLocaleTimeString();
     }
 
-      // Auth UI & actions
-  async function refreshAuthUI() {
-    const { data: { session } } = await sb.auth.getSession();
-    const authed = !!session;
-    authEl.style.display = authed ? 'none' : 'block';
-    appEl.style.display = authed ? 'block' : 'none';
-    if (authed) load();
-  }
+    // Auth UI & actions
+    async function refreshAuthUI() {
+      const { data: { session } } = await sb.auth.getSession();
+      const authed = !!session;
+      authEl.style.display = authed ? 'none' : 'block';
+      appEl.style.display = authed ? 'block' : 'none';
+      if (authed) load();
+    }
+    document.getElementById('refresh').addEventListener('click', load);
+    rangeSel.addEventListener('change', load);
 
-  signinBtn.addEventListener('click', async () => {
-    authMsgEl.textContent = '';
-    const { error } = await sb.auth.signInWithPassword({
-      email: emailEl.value.trim(),
-      password: passwordEl.value
+    document.getElementById('signin').addEventListener('click', async () => {
+      authMsgEl.textContent = '';
+      const { error } = await sb.auth.signInWithPassword({
+        email: emailEl.value.trim(),
+        password: passwordEl.value
+      });
+      if (error) { authMsgEl.textContent = error.message; return; }
+      await refreshAuthUI();
     });
-    if (error) { authMsgEl.textContent = error.message; return; }
-    await refreshAuthUI();
-  });
 
-  signoutBtn.addEventListener('click', async () => {
-    await sb.auth.signOut();
-    await refreshAuthUI();
-  });
+    signoutBtn.addEventListener('click', async () => {
+      await sb.auth.signOut();
+      await refreshAuthUI();
+    });
 
-  document.getElementById('refresh').addEventListener('click', load);
-  rangeSel.addEventListener('change', load);
-
-  // Start: show either auth or app (session is remembered)
-  refreshAuthUI();
-
-  // keep your existing auto-refresh timer
-  setInterval(load, 10000);
-
-
+    // Start
+    refreshAuthUI();
+    setInterval(load, 10000);
   </script>
 </body>
 </html>
