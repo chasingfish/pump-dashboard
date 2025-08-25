@@ -17,11 +17,10 @@
     .muted { color:#666; }
     .panel { border:1px solid #eee; border-radius:10px; padding:12px; margin-bottom:16px; box-shadow:0 1px 2px rgba(0,0,0,0.04); }
     .kv { display:grid; grid-template-columns: 160px 1fr; gap:6px 10px; align-items:center; }
-    .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace; }
+    .mono { font-family: ui-monospace,SFMono-Regular,Menlo,Consolas,"Liberation Mono",monospace; }
     .small { font-size:12px; }
-    .ok    { color:#156d2f; }
-    .warn  { color:#9b6b00; }
     #events { white-space:pre-wrap; max-height:160px; overflow:auto; border:1px solid #eee; border-radius:8px; padding:8px; background:#fafafa; }
+    #schema { word-break: break-all; }
   </style>
 </head>
 <body>
@@ -136,7 +135,7 @@
       topicCmd: (id) => `pump/uv/cmd/${id}`
     };
 
-    // UI
+    // UI refs
     const rangeSel = document.getElementById('range');
     const rowsEl = document.getElementById('rows');
     const latestEl = document.getElementById('latest');
@@ -171,19 +170,81 @@
     const schemaEl = document.getElementById('schema');
     function log(msg){ const line = `[${new Date().toLocaleTimeString()}] ${msg}\n`; eventsEl.textContent = line + eventsEl.textContent; }
 
-    // Utils
-    function rssiLabel(dbm){ if (dbm>=-60) return 'Excellent'; if (dbm>=-67) return 'Very good'; if (dbm>=-75) return 'Good'; if (dbm>=-82) return 'Fair'; if (dbm>=-90) return 'Poor'; return 'Very poor'; }
-    function isRecent(tsIso, sec){ if (!tsIso) return false; return (Date.now() - new Date(tsIso).getTime()) <= sec*1000; }
-    function pick(obj, ...keys){ for (const k of keys){ if (obj && obj[k] != null) return obj[k]; } return null; }
-    function cmpSemver(a,b){ const pa=String(a).split('.').map(n=>parseInt(n,10)); const pb=String(b).split('.').map(n=>parseInt(n,10)); for(let i=0;i<3;i++){const x=pa[i]||0,y=pb[i]||0; if(x!==y) return x<y?-1:1;} return 0; }
-    function tsOf(r){ return pick(r,'ts','created_at','time'); }
-    function fwOf(r){ return pick(r,'fw','firmware','version'); }
-    function tempAOf(r){ return pick(r,'temp_pump_a_c','temp_a_c','temp_a','temp_c','temp'); }
-    function tempBOf(r){ return pick(r,'temp_pump_b_c','temp_b_c','temp_b'); }
+    // ------- dynamic column mapping (learn from latest row) -------
+    let COL = null; // { tsKey, fwKey, aKey, bKey, rssiKey, uvKey, devKey }
+    function detectColumns(row){
+      if (!row) return null;
+      const keys = Object.keys(row);
+      const L = keys.map(k=>k.toLowerCase());
+      const pickFirst = (...cands)=> {
+        for (const c of cands){
+          const i = L.indexOf(c); if (i>=0) return keys[i];
+        }
+        return null;
+      };
+      const findIncl = (inclFn)=> {
+        for (let i=0;i<keys.length;i++){ if (inclFn(keys[i].toLowerCase())) return keys[i]; }
+        return null;
+      };
 
+      // time
+      let tsKey = pickFirst('ts','created_at','time','timestamp');
+      if (!tsKey) tsKey = findIncl(k => k.includes('time') || k.includes('date'));
+
+      // firmware
+      let fwKey = pickFirst('fw','firmware','version','fw_version');
+
+      // status / device / rssi
+      let uvKey   = pickFirst('uv_status','status');
+      let devKey  = pickFirst('device_id','device');
+      let rssiKey = pickFirst('rssi','wifi_rssi');
+
+      // temps: prefer *_pump_a_* or *_a_*, and *_pump_b_* or *_b_*. Prefer *_c.
+      const tempKeys = keys.filter(k => k.toLowerCase().includes('temp'));
+      function chooseTemp(which){ // which = 'a' | 'b'
+        const pri = tempKeys.filter(k=>{
+          const s=k.toLowerCase();
+          return (s.includes(`pump_${which}`) || s.endsWith(`_${which}`) || s.includes(`_${which}_`));
+        }).sort((x,y)=> (y.toLowerCase().includes('_c')?1:0) - (x.toLowerCase().includes('_c')?1:0));
+        if (pri.length) return pri[0];
+        // otherwise: any temp that ends with _c
+        const cOnly = tempKeys.filter(k=>k.toLowerCase().endsWith('_c'));
+        if (cOnly.length) return cOnly[0];
+        return tempKeys[0] || null;
+      }
+      let aKey = chooseTemp('a');
+      let bKey = chooseTemp('b');
+      // avoid A==B
+      if (aKey && bKey && aKey===bKey){
+        const others = tempKeys.filter(k=>k!==aKey);
+        bKey = others[0] || null;
+      }
+
+      return { tsKey, fwKey, aKey, bKey, rssiKey, uvKey, devKey, keys };
+    }
+
+    // helpers using current COL + per-row fallback
+    function val(r, k){ return (k && r[k] != null) ? r[k] : null; }
+    function tsOf(r){ return val(r, COL?.tsKey) ?? r.ts ?? r.created_at ?? r.time; }
+    function fwOf(r){ return val(r, COL?.fwKey) ?? r.fw ?? r.firmware ?? r.version; }
+    function rssiOf(r){ return val(r, COL?.rssiKey) ?? r.rssi ?? r.wifi_rssi; }
+    function uvOf(r){ return val(r, COL?.uvKey) ?? r.uv_status ?? r.status; }
+    function devOf(r){ return val(r, COL?.devKey) ?? r.device_id ?? r.device; }
+    function tempAOf(r){
+      let v = val(r, COL?.aKey);
+      if (v==null) v = r.temp_pump_a_c ?? r.temp_a_c ?? r.temp_a ?? r.temp_c ?? r.temp;
+      return v;
+    }
+    function tempBOf(r){
+      let v = val(r, COL?.bKey);
+      if (v==null) v = r.temp_pump_b_c ?? r.temp_b_c ?? r.temp_b;
+      return v;
+    }
+
+    // Charts
     let chartA, chartB;
     function renderCharts(rows){
-      const ordered = rows.slice().reverse(); // oldest → newest
+      const ordered = rows.slice().reverse();
       const labels = ordered.map(r => new Date(tsOf(r)).toLocaleTimeString());
       const valsA = ordered.map(r => { const v=tempAOf(r); return v==null?null:Number(v); });
       const valsB = ordered.map(r => { const v=tempBOf(r); return v==null?null:Number(v); });
@@ -201,16 +262,21 @@
       else { chartB.data.labels = labels; chartB.data.datasets[0].data = valsB; chartB.update('none'); }
     }
 
+    // Data fetch
     async function queryPumpReadings(hours){
       const fromIso = new Date(Date.now() - hours*3600*1000).toISOString();
       // 1) preferred: time-bounded
-      let q = sb.from('pump_readings').select('*').gte('ts', fromIso).order('ts', { ascending:false }).limit(500);
-      let { data, error } = await q;
+      let { data, error } = await sb
+        .from('pump_readings')
+        .select('*')
+        .gte('ts', fromIso)
+        .order('ts', { ascending:false })
+        .limit(500);
       if (error){ log('Query error: ' + error.message); return { data:[], error }; }
-      // 2) fallback: last 200 rows (no time filter) if empty
+      // 2) fallback: last 200 rows if empty
       if (!data || data.length===0){
-        log('No rows for range; falling back to last 200 rows…');
-        let r = await sb.from('pump_readings').select('*').order('ts',{ascending:false}).limit(200);
+        log('No rows in range; falling back to last 200…');
+        const r = await sb.from('pump_readings').select('*').order('ts',{ascending:false}).limit(200);
         if (r.error){ log('Fallback query error: ' + r.error.message); return { data:[], error:r.error }; }
         data = r.data || [];
       }
@@ -224,11 +290,11 @@
         const tr = document.createElement('tr');
         tr.innerHTML = `
           <td>${new Date(tsOf(r)).toISOString()}</td>
-          <td>${r.device_id ?? ''}</td>
-          <td><span class="pill ${r.uv_status === 'GREEN' ? 'green' : 'red'}">${r.uv_status ?? ''}</span></td>
+          <td>${devOf(r) ?? ''}</td>
+          <td><span class="pill ${(uvOf(r)==='GREEN') ? 'green' : 'red'}">${uvOf(r) ?? ''}</span></td>
           <td>${tA==null?'':Number(tA).toFixed(2)}</td>
           <td>${tB==null?'':Number(tB).toFixed(2)}</td>
-          <td>${r.rssi ?? ''}</td>
+          <td>${rssiOf(r) ?? ''}</td>
           <td class="mono">${fwOf(r) ?? ''}</td>
         `;
         rowsEl.appendChild(tr);
@@ -248,9 +314,15 @@
 
       countEl.textContent = data.length;
       if (data.length){
+        // Learn mapping from latest row
+        COL = detectColumns(data[0]);
+        schemaEl.textContent = COL
+          ? `Detected → ts:${COL.tsKey || '—'}, fw:${COL.fwKey || '—'}, A:${COL.aKey || '—'}, B:${COL.bKey || '—'}, rssi:${COL.rssiKey || '—'}, status:${COL.uvKey || '—'}, device:${COL.devKey || '—'} | Keys: ${COL.keys.join(', ')}`
+          : 'Could not detect columns (no row?)';
+
         const latest = data[0];
-        latestEl.textContent = latest.uv_status || '—';
-        latestEl.className = 'pill ' + (latest.uv_status === 'GREEN' ? 'green' : 'red');
+        latestEl.textContent = uvOf(latest) || '—';
+        latestEl.className = 'pill ' + ((uvOf(latest) === 'GREEN') ? 'green' : 'red');
 
         const tA = tempAOf(latest), tB = tempBOf(latest);
         tempALatestEl.textContent = (tA==null)?'—':(+tA).toFixed(2) + ' °C';
@@ -261,7 +333,7 @@
 
         // device_status (best-effort)
         try{
-          const did = latest.device_id;
+          const did = devOf(latest);
           const { data: ds, error: dserr } = await sb
             .from('device_status')
             .select('last_seen_ts, last_online_ts, online')
@@ -270,15 +342,12 @@
           if (!dserr && ds){
             lastConnEl.textContent = ds.last_online_ts ? new Date(ds.last_online_ts).toLocaleString() : (ds.online?'now':'—');
             lastSeenEl.textContent = ds.last_seen_ts ? new Date(ds.last_seen_ts).toLocaleString() : (ds.online?'now':'—');
-            const fresh = data.filter(r => r.rssi != null && isRecent(tsOf(r), 120)).slice(0,5);
-            if (fresh.length){ const avg = fresh.reduce((s,r)=>s+Number(r.rssi), 0)/fresh.length; rssiNowEl.textContent = `${avg.toFixed(0)} dBm (${rssiLabel(avg)})`; } else { rssiNowEl.textContent = 'No signal'; }
+            const fresh = data.filter(r => rssiOf(r) != null && (Date.now()-new Date(tsOf(r)).getTime()) <= 120000).slice(0,5);
+            if (fresh.length){ const avg = fresh.reduce((s,r)=>s+Number(rssiOf(r)), 0)/fresh.length; rssiNowEl.textContent = `${avg.toFixed(0)} dBm (${rssiLabel(avg)})`; } else { rssiNowEl.textContent = 'No signal'; }
           } else {
             lastConnEl.textContent = '—'; lastSeenEl.textContent = '—';
           }
         } catch(_){ /* ignore */ }
-
-        // Schema debug (keys of latest row)
-        schemaEl.textContent = 'Columns: ' + Object.keys(latest).join(', ');
 
       } else {
         latestEl.textContent = '—'; latestEl.className = 'pill';
@@ -306,11 +375,25 @@
       log('Load done: rows=' + data.length);
     }
 
+    // Manifest compare (with direct DB fallback for current FW)
     async function fetchManifest(){
       const url = MANIFEST_URL + '?cb=' + Date.now();
       const res = await fetch(url, { cache:'no-store' });
       if (!res.ok) throw new Error('manifest fetch ' + res.status);
       return res.json();
+    }
+
+    async function ensureFwCurrent(){
+      const cur = (fwCurrentEl.textContent || '').trim();
+      if (cur && cur !== '—') return cur;
+      // fast 1-row fetch to learn FW directly
+      const r = await sb.from('pump_readings').select('*').order('ts',{ascending:false}).limit(1);
+      if (r.data && r.data.length){
+        if (!COL) COL = detectColumns(r.data[0]);
+        const fwCur = fwOf(r.data[0]);
+        if (fwCur){ fwCurrentEl.textContent = fwCur; return fwCur; }
+      }
+      return null;
     }
 
     async function refreshFirmwareCompare(){
@@ -320,7 +403,11 @@
         const manifest = await fetchManifest();
         const mver = manifest.version || '—';
         fwManifestEl.textContent = mver;
-        const cur = (fwCurrentEl.textContent || '').trim();
+
+        let cur = (fwCurrentEl.textContent || '').trim();
+        if (!cur || cur==='—'){
+          cur = await ensureFwCurrent();
+        }
         if (!cur || cur==='—' || !mver || mver==='—'){
           fwUpdateFlagEl.textContent = '—';
           fwUpdateFlagEl.className = 'pill';
@@ -328,7 +415,8 @@
           log('Manifest fetched, current FW unknown yet.');
           return;
         }
-        const newer = cmpSemver(cur, mver) < 0;
+        const newer = (function cmp(a,b){ const pa=String(a).split('.').map(n=>parseInt(n,10)); const pb=String(b).split('.').map(n=>parseInt(n,10)); for(let i=0;i<3;i++){const x=pa[i]||0,y=pb[i]||0; if(x!==y) return x<y; } return false; })(cur, mver);
+
         fwUpdateFlagEl.textContent = newer ? 'YES' : 'No';
         fwUpdateFlagEl.className = 'pill ' + (newer ? 'red' : 'green');
         fwMsgEl.textContent = newer ? 'New firmware available in manifest.' : 'Device is up to date.';
@@ -342,8 +430,10 @@
       }
     }
 
+    // Copyable force-check command
     function buildForceCheckCommand(){
       const topic = MQTT.topicCmd(MQTT.devId);
+      // all escaping is CMD-safe and already tested
       return `"C:\\Program Files\\mosquitto\\mosquitto_pub.exe" -h ${MQTT.host} -p ${MQTT.port} -V mqttv311 --cafile "${MQTT.cafile}" -u ${MQTT.user} -P ${MQTT.pass} -t "${topic}" -m "{\\"cmd\\":\\"check_update\\"}"`;
     }
     async function copyForceCheck(){
@@ -355,7 +445,7 @@
       log('Copied force-check command to clipboard.');
     }
 
-    // Auth UI
+    // Auth/UI wiring
     async function refreshAuthUI(){
       const { data: { session } } = await sb.auth.getSession();
       const authed = !!session;
@@ -379,9 +469,12 @@
     });
     signoutBtn.addEventListener('click', async () => { await sb.auth.signOut(); await refreshAuthUI(); });
 
-    // Start
+    // Start + auto-refresh
     refreshAuthUI();
     setInterval(async () => { await load(); await refreshFirmwareCompare(); }, 10000);
+
+    // RSSI helper
+    function rssiLabel(dbm){ if (dbm>=-60) return 'Excellent'; if (dbm>=-67) return 'Very good'; if (dbm>=-75) return 'Good'; if (dbm>=-82) return 'Fair'; if (dbm>=-90) return 'Poor'; return 'Very poor'; }
   </script>
 </body>
 </html>
