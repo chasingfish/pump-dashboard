@@ -242,14 +242,17 @@
       const hours = parseInt(rangeSel.value, 10);
       const fromIso = new Date(Date.now() - hours * 3600 * 1000).toISOString();
 
-      const { data, error } = await sb
-        .from('pump_readings')
-        .select('device_id, ts, uv_status, temp_pump_a_c, temp_pump_b_c, temp_c, rssi, fw')
-        .gte('ts', fromIso)
-        .order('ts', { ascending: false })
-        .limit(500);
+const { data, error } = await sb
+  .from('pump_readings')
+  .select('*')                // <- don’t name missing columns
+  .gte('ts', fromIso)
+  .order('ts', { ascending: false })
+  .limit(500);
 
-      if (error) { statusEl.textContent = 'Error: ' + error.message; return; }
+if (error) {
+  statusEl.textContent = 'Query failed: ' + error.message + ' (FIXED: switched to select("*"))';
+  return;
+}
 
       countEl.textContent = data.length;
 
