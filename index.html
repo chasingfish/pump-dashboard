@@ -8,7 +8,7 @@
     body { font:14px/1.4 system-ui,-apple-system,Segoe UI,Roboto,sans-serif; margin:20px; }
     .row { display:flex; flex-wrap:wrap; gap:10px; align-items:center; margin-bottom:12px; }
     button { padding:8px 12px; cursor:pointer; }
-    table { border-collapse:collapse; width:100%; }
+    table { border-collapse: collapse; width:100%; }
     th, td { border:1px solid #ddd; padding:8px; }
     th { background:#f7f7f7; text-align:left; }
     .pill { padding:2px 8px; border-radius:12px; display:inline-block; }
@@ -24,7 +24,6 @@
   </style>
 </head>
 <body>
-  <!-- Auth -->
   <div id="auth" style="margin-bottom:16px; display:none;">
     <h2>Sign in</h2>
     <div class="row">
@@ -35,7 +34,6 @@
     <div id="authMsg" style="color:#b00;"></div>
   </div>
 
-  <!-- App -->
   <div id="app" style="display:none;">
     <h1>Pump Readings (MVP)</h1>
 
@@ -51,7 +49,6 @@
       <button id="signout" title="Sign out of this browser">Sign out</button>
     </div>
 
-    <!-- Firmware panel -->
     <div class="panel">
       <h3 style="margin-top:0;">Firmware</h3>
       <div class="kv">
@@ -65,8 +62,8 @@
         <div><span id="fwUpdateFlag" class="pill">—</span></div>
       </div>
       <div class="row" style="margin-top:10px;">
-        <button id="fwCheckBtn" title="Fetch manifest.json and compare">Check (compare)</button>
-        <button id="fwForceBtn" title="Copies a mosquitto command that makes the device check right now">Force device to check now</button>
+        <button id="fwCheckBtn">Check (compare)</button>
+        <button id="fwForceBtn" title="Copies a mosquitto command to force a manifest check">Force device to check now</button>
         <span id="fwMsg" class="muted small"></span>
       </div>
       <div id="fwCmdWrap" class="small mono" style="display:none; margin-top:8px;">
@@ -75,7 +72,6 @@
       </div>
     </div>
 
-    <!-- Snapshots -->
     <div class="row">
       <div>Latest: <span id="latest" class="pill"></span></div>
       <div>Total rows: <strong id="count">0</strong></div>
@@ -87,11 +83,9 @@
       <div>Latest Temp B: <span id="tempBLatest">—</span></div>
     </div>
 
-    <!-- Charts -->
     <canvas id="chartA" height="140"></canvas>
     <canvas id="chartB" height="140" style="margin-top:14px;"></canvas>
 
-    <!-- Table -->
     <table style="margin-top:16px;">
       <thead>
         <tr>
@@ -107,7 +101,6 @@
       <tbody id="rows"></tbody>
     </table>
 
-    <!-- Events & schema -->
     <div class="panel" style="margin-top:16px;">
       <h3 style="margin-top:0;">Events</h3>
       <div id="events" class="mono small"></div>
@@ -118,13 +111,12 @@
   <script src="https://unpkg.com/@supabase/supabase-js@2"></script>
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
   <script>
-    // Supabase
+    // --- CONFIG ---
     const SUPABASE_URL = "https://ojomcciunusemwszdnrl.supabase.co";
     const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im9qb21jY2l1bnVzZW13c3pkbnJsIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTQ3MTUyODYsImV4cCI6MjA3MDI5MTI4Nn0.U7gKI4QOklKkSq_Jbfxm6hQBrvS4JipV7z6KtIl1kz8";
     const MANIFEST_URL = "https://ojomcciunusemwszdnrl.supabase.co/storage/v1/object/public/ota/manifest.json";
     const sb = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
-    // MQTT helpers (for copyable commands)
     const MQTT = {
       host: "3614c4f5a4b94a56a45e17893c67c2d7.s1.eu.hivemq.cloud",
       port: 8883,
@@ -135,346 +127,261 @@
       topicCmd: (id) => `pump/uv/cmd/${id}`
     };
 
-    // UI refs
-    const rangeSel = document.getElementById('range');
-    const rowsEl = document.getElementById('rows');
-    const latestEl = document.getElementById('latest');
-    const countEl = document.getElementById('count');
-    const signalEl = document.getElementById('signal');
-    const lastConnEl = document.getElementById('lastconn');
-    const lastSeenEl = document.getElementById('lastseen');
-    const rssiNowEl = document.getElementById('rssiNow');
-    const tempALatestEl = document.getElementById('tempALatest');
-    const tempBLatestEl = document.getElementById('tempBLatest');
-    const statusEl = document.getElementById('status');
-    const authEl = document.getElementById('auth');
-    const appEl = document.getElementById('app');
-    const emailEl = document.getElementById('email');
-    const passwordEl = document.getElementById('password');
-    const signinBtn = document.getElementById('signin');
-    const authMsgEl = document.getElementById('authMsg');
-    const signoutBtn = document.getElementById('signout');
+    // --- UI refs ---
+    const els = Object.fromEntries([
+      'auth','app','email','password','signin','authMsg','signout','range','refresh','status',
+      'rows','latest','count','signal','lastconn','lastseen','rssiNow','tempALatest','tempBLatest',
+      'fwCurrent','fwManifest','fwUpdateFlag','fwCheckBtn','fwForceBtn','fwMsg','fwCmdWrap','fwCmdText',
+      'events','schema'
+    ].map(id => [id, document.getElementById(id)]));
 
-    // Firmware panel
-    const fwCurrentEl = document.getElementById('fwCurrent');
-    const fwManifestEl = document.getElementById('fwManifest');
-    const fwUpdateFlagEl = document.getElementById('fwUpdateFlag');
-    const fwCheckBtn = document.getElementById('fwCheckBtn');
-    const fwForceBtn = document.getElementById('fwForceBtn');
-    const fwMsgEl = document.getElementById('fwMsg');
-    const fwCmdWrap = document.getElementById('fwCmdWrap');
-    const fwCmdText = document.getElementById('fwCmdText');
+    function log(m){ els.events.textContent = `[${new Date().toLocaleTimeString()}] ${m}\n` + els.events.textContent; }
 
-    // Events & schema
-    const eventsEl = document.getElementById('events');
-    const schemaEl = document.getElementById('schema');
-    function log(msg){ const line = `[${new Date().toLocaleTimeString()}] ${msg}\n`; eventsEl.textContent = line + eventsEl.textContent; }
-
-    // ------- dynamic column mapping (learn from latest row) -------
-    let COL = null; // { tsKey, fwKey, aKey, bKey, rssiKey, uvKey, devKey }
-    function detectColumns(row){
-      if (!row) return null;
-      const keys = Object.keys(row);
+    // --- column detection from latest row, with strong preferences matching your firmware keys ---
+    let COL = null;
+    function detectColumns(r){
+      if (!r) return null;
+      const keys = Object.keys(r);
       const L = keys.map(k=>k.toLowerCase());
-      const pickFirst = (...cands)=> {
-        for (const c of cands){
-          const i = L.indexOf(c); if (i>=0) return keys[i];
-        }
-        return null;
-      };
-      const findIncl = (inclFn)=> {
-        for (let i=0;i<keys.length;i++){ if (inclFn(keys[i].toLowerCase())) return keys[i]; }
-        return null;
-      };
+      const at = (name)=>{ const i=L.indexOf(name); return i>=0 ? keys[i] : null; };
+      const incl = (frag)=>{ const i=L.findIndex(k=>k.includes(frag)); return i>=0 ? keys[i] : null; };
 
-      // time
-      let tsKey = pickFirst('ts','created_at','time','timestamp');
-      if (!tsKey) tsKey = findIncl(k => k.includes('time') || k.includes('date'));
+      // hard preferences (exact from firmware)
+      const tsKey  = at('ts')      || incl('time') || incl('date');
+      const fwKey  = at('fw')      || at('fw_version') || at('firmware') || at('version') || incl('fw');
+      const devKey = at('device_id') || at('device') || incl('device');
+      const uvKey  = at('uv_status') || at('status') || incl('status');
+      const rssiKey= at('rssi') || at('wifi_rssi') || incl('rssi');
 
-      // firmware
-      let fwKey = pickFirst('fw','firmware','version','fw_version');
+      // temps
+      const has = (k)=> k && r[k] != null;
+      let aKey = at('temp_pump_a_c') || at('temp_a_c') || at('temp_a') || incl('pump_a') || incl('_a_');
+      let bKey = at('temp_pump_b_c') || at('temp_b_c') || at('temp_b') || incl('pump_b') || incl('_b_');
 
-      // status / device / rssi
-      let uvKey   = pickFirst('uv_status','status');
-      let devKey  = pickFirst('device_id','device');
-      let rssiKey = pickFirst('rssi','wifi_rssi');
+      // if still missing, pick any temps ending with _c (prefers °C)
+      const temps = keys.filter(k => k.toLowerCase().includes('temp'));
+      if (!aKey) aKey = temps.find(k => k.toLowerCase().endsWith('_a_c')) || temps.find(k=>k.toLowerCase().endsWith('_c')) || temps[0];
+      if (!bKey) bKey = temps.find(k => k.toLowerCase().endsWith('_b_c')) || temps.find(k=>k!==aKey && k.toLowerCase().includes('temp'));
 
-      // temps: prefer *_pump_a_* or *_a_*, and *_pump_b_* or *_b_*. Prefer *_c.
-      const tempKeys = keys.filter(k => k.toLowerCase().includes('temp'));
-      function chooseTemp(which){ // which = 'a' | 'b'
-        const pri = tempKeys.filter(k=>{
-          const s=k.toLowerCase();
-          return (s.includes(`pump_${which}`) || s.endsWith(`_${which}`) || s.includes(`_${which}_`));
-        }).sort((x,y)=> (y.toLowerCase().includes('_c')?1:0) - (x.toLowerCase().includes('_c')?1:0));
-        if (pri.length) return pri[0];
-        // otherwise: any temp that ends with _c
-        const cOnly = tempKeys.filter(k=>k.toLowerCase().endsWith('_c'));
-        if (cOnly.length) return cOnly[0];
-        return tempKeys[0] || null;
-      }
-      let aKey = chooseTemp('a');
-      let bKey = chooseTemp('b');
       // avoid A==B
-      if (aKey && bKey && aKey===bKey){
-        const others = tempKeys.filter(k=>k!==aKey);
-        bKey = others[0] || null;
-      }
+      if (aKey === bKey) bKey = temps.find(k=>k!==aKey) || null;
 
-      return { tsKey, fwKey, aKey, bKey, rssiKey, uvKey, devKey, keys };
+      return { tsKey, fwKey, devKey, uvKey, rssiKey, aKey, bKey, keys };
     }
 
-    // helpers using current COL + per-row fallback
-    function val(r, k){ return (k && r[k] != null) ? r[k] : null; }
-    function tsOf(r){ return val(r, COL?.tsKey) ?? r.ts ?? r.created_at ?? r.time; }
-    function fwOf(r){ return val(r, COL?.fwKey) ?? r.fw ?? r.firmware ?? r.version; }
-    function rssiOf(r){ return val(r, COL?.rssiKey) ?? r.rssi ?? r.wifi_rssi; }
-    function uvOf(r){ return val(r, COL?.uvKey) ?? r.uv_status ?? r.status; }
-    function devOf(r){ return val(r, COL?.devKey) ?? r.device_id ?? r.device; }
-    function tempAOf(r){
-      let v = val(r, COL?.aKey);
+    const get = (o,k) => (k && o && o[k] != null) ? o[k] : null;
+    const tsOf   = (r)=> get(r, COL?.tsKey)   ?? r.ts ?? r.created_at ?? r.time;
+    const fwOf   = (r)=> get(r, COL?.fwKey)   ?? r.fw ?? r.fw_version ?? r.firmware ?? r.version;
+    const devOf  = (r)=> get(r, COL?.devKey)  ?? r.device_id ?? r.device;
+    const uvOf   = (r)=> get(r, COL?.uvKey)   ?? r.uv_status ?? r.status;
+    const rssiOf = (r)=> get(r, COL?.rssiKey) ?? r.rssi ?? r.wifi_rssi;
+    const taOf   = (r)=> {
+      let v = get(r, COL?.aKey);
       if (v==null) v = r.temp_pump_a_c ?? r.temp_a_c ?? r.temp_a ?? r.temp_c ?? r.temp;
       return v;
-    }
-    function tempBOf(r){
-      let v = val(r, COL?.bKey);
+    };
+    const tbOf   = (r)=> {
+      let v = get(r, COL?.bKey);
       if (v==null) v = r.temp_pump_b_c ?? r.temp_b_c ?? r.temp_b;
       return v;
-    }
+    };
 
-    // Charts
+    // --- charts ---
     let chartA, chartB;
     function renderCharts(rows){
       const ordered = rows.slice().reverse();
       const labels = ordered.map(r => new Date(tsOf(r)).toLocaleTimeString());
-      const valsA = ordered.map(r => { const v=tempAOf(r); return v==null?null:Number(v); });
-      const valsB = ordered.map(r => { const v=tempBOf(r); return v==null?null:Number(v); });
+      const A = ordered.map(r => { const v=taOf(r); return v==null?null:Number(v); });
+      const B = ordered.map(r => { const v=tbOf(r); return v==null?null:Number(v); });
 
       const ctxA = document.getElementById('chartA').getContext('2d');
       const ctxB = document.getElementById('chartB').getContext('2d');
-      const dsA = [{ data: valsA, spanGaps:true, pointRadius:0, borderWidth:2, label:'Temp A (°C)' }];
-      const dsB = [{ data: valsB, spanGaps:true, pointRadius:0, borderWidth:2, label:'Temp B (°C)' }];
+      const dsA = [{ data:A, spanGaps:true, pointRadius:0, borderWidth:2, label:'Temp A (°C)' }];
+      const dsB = [{ data:B, spanGaps:true, pointRadius:0, borderWidth:2, label:'Temp B (°C)' }];
       const opts = { animation:false, plugins:{legend:{display:true}}, scales:{ y:{ title:{display:true,text:'°C'} } } };
 
       if (!chartA) chartA = new Chart(ctxA, { type:'line', data:{ labels, datasets:dsA }, options:opts });
-      else { chartA.data.labels = labels; chartA.data.datasets[0].data = valsA; chartA.update('none'); }
+      else { chartA.data.labels = labels; chartA.data.datasets[0].data = A; chartA.update('none'); }
 
       if (!chartB) chartB = new Chart(ctxB, { type:'line', data:{ labels, datasets:dsB }, options:opts });
-      else { chartB.data.labels = labels; chartB.data.datasets[0].data = valsB; chartB.update('none'); }
+      else { chartB.data.labels = labels; chartB.data.datasets[0].data = B; chartB.update('none'); }
     }
 
-    // Data fetch
-    async function queryPumpReadings(hours){
+    // --- data load ---
+    async function load(){
+      const { data: { session } } = await sb.auth.getSession();
+      if (!session){ log('Not signed in.'); return; }
+
+      const hours = parseInt(els.range.value,10);
+      els.status.textContent = 'Loading…';
+      log(`Load start (range=${hours}h)…`);
+
       const fromIso = new Date(Date.now() - hours*3600*1000).toISOString();
-      // 1) preferred: time-bounded
-      let { data, error } = await sb
-        .from('pump_readings')
-        .select('*')
-        .gte('ts', fromIso)
-        .order('ts', { ascending:false })
-        .limit(500);
-      if (error){ log('Query error: ' + error.message); return { data:[], error }; }
-      // 2) fallback: last 200 rows if empty
-      if (!data || data.length===0){
-        log('No rows in range; falling back to last 200…');
+      let { data, error } = await sb.from('pump_readings').select('*').gte('ts', fromIso).order('ts', { ascending:false }).limit(500);
+      if (error){
+        // fallback: just grab the last 200
+        log('Primary query failed: ' + error.message + ' — trying fallback');
         const r = await sb.from('pump_readings').select('*').order('ts',{ascending:false}).limit(200);
-        if (r.error){ log('Fallback query error: ' + r.error.message); return { data:[], error:r.error }; }
+        if (r.error){ els.status.textContent = 'Error: ' + r.error.message; return; }
         data = r.data || [];
       }
-      return { data, error:null };
-    }
 
-    function renderRows(data){
-      rowsEl.innerHTML = '';
+      els.count.textContent = data.length;
+
+      if (data.length){
+        COL = detectColumns(data[0]);
+        els.schema.textContent = COL
+          ? `Detected → ts:${COL.tsKey||'—'}, fw:${COL.fwKey||'—'}, A:${COL.aKey||'—'}, B:${COL.bKey||'—'}, rssi:${COL.rssiKey||'—'}, status:${COL.uvKey||'—'}, device:${COL.devKey||'—'} | Keys: ${COL.keys.join(', ')}`
+          : 'Could not detect columns (no row?)';
+
+        const latest = data[0];
+        els.latest.textContent = uvOf(latest) || '—';
+        els.latest.className = 'pill ' + ((uvOf(latest)==='GREEN') ? 'green' : 'red');
+
+        const tA = taOf(latest), tB = tbOf(latest);
+        els.tempALatest.textContent = (tA==null)?'—':(+tA).toFixed(2)+' °C';
+        els.tempBLatest.textContent = (tB==null)?'—':(+tB).toFixed(2)+' °C';
+
+        const fwCur = fwOf(latest);
+        els.fwCurrent.textContent = fwCur || '—';
+
+        // device_status (best effort)
+        try{
+          const did = devOf(latest);
+          const { data: ds } = await sb.from('device_status').select('last_seen_ts,last_online_ts,online').eq('device_id', did).single();
+          if (ds){
+            els.lastconn.textContent = ds.last_online_ts ? new Date(ds.last_online_ts).toLocaleString() : (ds.online?'now':'—');
+            els.lastseen.textContent = ds.last_seen_ts ? new Date(ds.last_seen_ts).toLocaleString() : (ds.online?'now':'—');
+            const fresh = data.filter(r => rssiOf(r) != null && (Date.now()-new Date(tsOf(r)).getTime()) <= 120000).slice(0,5);
+            if (fresh.length){
+              const avg = fresh.reduce((s,r)=>s+Number(rssiOf(r)),0)/fresh.length;
+              els.rssiNow.textContent = `${avg.toFixed(0)} dBm (${rssiLabel(avg)})`;
+            } else els.rssiNow.textContent = 'No signal';
+          }
+        }catch(_){}
+
+      } else {
+        els.latest.textContent = '—'; els.latest.className = 'pill';
+        els.fwCurrent.textContent = '—';
+        els.rssiNow.textContent = '—';
+        els.schema.textContent = 'No rows found.';
+      }
+
+      // table
+      els.rows.innerHTML = '';
       for (const r of data){
-        const tA = tempAOf(r), tB = tempBOf(r);
+        const A = taOf(r), B = tbOf(r);
         const tr = document.createElement('tr');
         tr.innerHTML = `
           <td>${new Date(tsOf(r)).toISOString()}</td>
           <td>${devOf(r) ?? ''}</td>
           <td><span class="pill ${(uvOf(r)==='GREEN') ? 'green' : 'red'}">${uvOf(r) ?? ''}</span></td>
-          <td>${tA==null?'':Number(tA).toFixed(2)}</td>
-          <td>${tB==null?'':Number(tB).toFixed(2)}</td>
+          <td>${A==null?'':Number(A).toFixed(2)}</td>
+          <td>${B==null?'':Number(B).toFixed(2)}</td>
           <td>${rssiOf(r) ?? ''}</td>
           <td class="mono">${fwOf(r) ?? ''}</td>
         `;
-        rowsEl.appendChild(tr);
-      }
-    }
-
-    async function load(){
-      const { data: { session } } = await sb.auth.getSession();
-      if (!session){ log('No session; waiting for sign-in.'); return; }
-
-      const hours = parseInt(rangeSel.value,10);
-      statusEl.textContent = 'Loading…';
-      log('Load start (range=' + hours + 'h)…');
-
-      const { data, error } = await queryPumpReadings(hours);
-      if (error){ statusEl.textContent = 'Error: ' + error.message; return; }
-
-      countEl.textContent = data.length;
-      if (data.length){
-        // Learn mapping from latest row
-        COL = detectColumns(data[0]);
-        schemaEl.textContent = COL
-          ? `Detected → ts:${COL.tsKey || '—'}, fw:${COL.fwKey || '—'}, A:${COL.aKey || '—'}, B:${COL.bKey || '—'}, rssi:${COL.rssiKey || '—'}, status:${COL.uvKey || '—'}, device:${COL.devKey || '—'} | Keys: ${COL.keys.join(', ')}`
-          : 'Could not detect columns (no row?)';
-
-        const latest = data[0];
-        latestEl.textContent = uvOf(latest) || '—';
-        latestEl.className = 'pill ' + ((uvOf(latest) === 'GREEN') ? 'green' : 'red');
-
-        const tA = tempAOf(latest), tB = tempBOf(latest);
-        tempALatestEl.textContent = (tA==null)?'—':(+tA).toFixed(2) + ' °C';
-        tempBLatestEl.textContent = (tB==null)?'—':(+tB).toFixed(2) + ' °C';
-
-        const fwCur = fwOf(latest);
-        fwCurrentEl.textContent = fwCur || '—';
-
-        // device_status (best-effort)
-        try{
-          const did = devOf(latest);
-          const { data: ds, error: dserr } = await sb
-            .from('device_status')
-            .select('last_seen_ts, last_online_ts, online')
-            .eq('device_id', did)
-            .single();
-          if (!dserr && ds){
-            lastConnEl.textContent = ds.last_online_ts ? new Date(ds.last_online_ts).toLocaleString() : (ds.online?'now':'—');
-            lastSeenEl.textContent = ds.last_seen_ts ? new Date(ds.last_seen_ts).toLocaleString() : (ds.online?'now':'—');
-            const fresh = data.filter(r => rssiOf(r) != null && (Date.now()-new Date(tsOf(r)).getTime()) <= 120000).slice(0,5);
-            if (fresh.length){ const avg = fresh.reduce((s,r)=>s+Number(rssiOf(r)), 0)/fresh.length; rssiNowEl.textContent = `${avg.toFixed(0)} dBm (${rssiLabel(avg)})`; } else { rssiNowEl.textContent = 'No signal'; }
-          } else {
-            lastConnEl.textContent = '—'; lastSeenEl.textContent = '—';
-          }
-        } catch(_){ /* ignore */ }
-
-      } else {
-        latestEl.textContent = '—'; latestEl.className = 'pill';
-        fwCurrentEl.textContent = '—';
-        rssiNowEl.textContent = '—';
-        schemaEl.textContent = 'No rows found.';
+        els.rows.appendChild(tr);
       }
 
-      renderRows(data);
       renderCharts(data);
 
-      // Staleness badge
+      // staleness badge
       if (data.length){
-        const ageMs = Date.now() - new Date(tsOf(data[0])).getTime();
-        const ageMin = Math.floor(ageMs/60000);
+        const ageMin = Math.floor((Date.now() - new Date(tsOf(data[0])).getTime())/60000);
         const fresh = ageMin <= 10;
-        signalEl.textContent = fresh ? 'OK' : `STALE: ${ageMin}m`;
-        signalEl.className = 'pill ' + (fresh ? 'green' : 'red');
+        els.signal.textContent = fresh ? 'OK' : `STALE: ${ageMin}m`;
+        els.signal.className = 'pill ' + (fresh ? 'green' : 'red');
       } else {
-        signalEl.textContent = 'NO DATA';
-        signalEl.className = 'pill red';
+        els.signal.textContent = 'NO DATA';
+        els.signal.className = 'pill red';
       }
 
-      statusEl.textContent = 'Last updated: ' + new Date().toLocaleTimeString();
+      els.status.textContent = 'Last updated: ' + new Date().toLocaleTimeString();
       log('Load done: rows=' + data.length);
     }
 
-    // Manifest compare (with direct DB fallback for current FW)
+    function rssiLabel(dbm){ if (dbm>=-60) return 'Excellent'; if (dbm>=-67) return 'Very good'; if (dbm>=-75) return 'Good'; if (dbm>=-82) return 'Fair'; if (dbm>=-90) return 'Poor'; return 'Very poor'; }
+
+    // --- firmware compare ---
     async function fetchManifest(){
       const url = MANIFEST_URL + '?cb=' + Date.now();
       const res = await fetch(url, { cache:'no-store' });
       if (!res.ok) throw new Error('manifest fetch ' + res.status);
       return res.json();
     }
-
-    async function ensureFwCurrent(){
-      const cur = (fwCurrentEl.textContent || '').trim();
-      if (cur && cur !== '—') return cur;
-      // fast 1-row fetch to learn FW directly
-      const r = await sb.from('pump_readings').select('*').order('ts',{ascending:false}).limit(1);
-      if (r.data && r.data.length){
-        if (!COL) COL = detectColumns(r.data[0]);
-        const fwCur = fwOf(r.data[0]);
-        if (fwCur){ fwCurrentEl.textContent = fwCur; return fwCur; }
-      }
-      return null;
+    function cmpSemver(a,b){
+      const pa=String(a).split('.').map(n=>parseInt(n,10));
+      const pb=String(b).split('.').map(n=>parseInt(n,10));
+      for (let i=0;i<3;i++){ const x=pa[i]||0, y=pb[i]||0; if (x!==y) return x<y?-1:1; }
+      return 0;
     }
-
     async function refreshFirmwareCompare(){
-      fwMsgEl.textContent = 'Fetching manifest…';
-      fwCmdWrap.style.display = 'none';
+      els.fwMsg.textContent = 'Fetching manifest…'; els.fwCmdWrap.style.display='none';
       try{
-        const manifest = await fetchManifest();
-        const mver = manifest.version || '—';
-        fwManifestEl.textContent = mver;
+        const m = await fetchManifest();
+        const mver = m.version || '—';
+        els.fwManifest.textContent = mver;
 
-        let cur = (fwCurrentEl.textContent || '').trim();
-        if (!cur || cur==='—'){
-          cur = await ensureFwCurrent();
-        }
+        const cur = (els.fwCurrent.textContent||'').trim();
         if (!cur || cur==='—' || !mver || mver==='—'){
-          fwUpdateFlagEl.textContent = '—';
-          fwUpdateFlagEl.className = 'pill';
-          fwMsgEl.textContent = '';
-          log('Manifest fetched, current FW unknown yet.');
+          els.fwUpdateFlag.textContent = '—'; els.fwUpdateFlag.className = 'pill';
+          els.fwMsg.textContent = cur && cur!=='—' ? 'Manifest loaded.' : 'Manifest loaded; waiting for device FW…';
+          log('Manifest fetched; current FW ' + (cur && cur!=='—' ? ('= ' + cur) : 'unknown'));
           return;
         }
-        const newer = (function cmp(a,b){ const pa=String(a).split('.').map(n=>parseInt(n,10)); const pb=String(b).split('.').map(n=>parseInt(n,10)); for(let i=0;i<3;i++){const x=pa[i]||0,y=pb[i]||0; if(x!==y) return x<y; } return false; })(cur, mver);
-
-        fwUpdateFlagEl.textContent = newer ? 'YES' : 'No';
-        fwUpdateFlagEl.className = 'pill ' + (newer ? 'red' : 'green');
-        fwMsgEl.textContent = newer ? 'New firmware available in manifest.' : 'Device is up to date.';
+        const newer = cmpSemver(cur, mver) < 0;
+        els.fwUpdateFlag.textContent = newer ? 'YES' : 'No';
+        els.fwUpdateFlag.className = 'pill ' + (newer ? 'red' : 'green');
+        els.fwMsg.textContent = newer ? 'New firmware available in manifest.' : 'Device is up to date.';
         log(`Manifest compare: current=${cur}, manifest=${mver}, update=${newer?'YES':'No'}`);
       }catch(e){
-        fwManifestEl.textContent = '—';
-        fwUpdateFlagEl.textContent = '—';
-        fwUpdateFlagEl.className = 'pill';
-        fwMsgEl.textContent = 'Manifest fetch failed.';
+        els.fwManifest.textContent = '—';
+        els.fwUpdateFlag.textContent = '—';
+        els.fwUpdateFlag.className = 'pill';
+        els.fwMsg.textContent = 'Manifest fetch failed.';
         log('Manifest fetch failed: ' + e.message);
       }
     }
 
-    // Copyable force-check command
+    // --- force-check command (copyable) ---
     function buildForceCheckCommand(){
       const topic = MQTT.topicCmd(MQTT.devId);
-      // all escaping is CMD-safe and already tested
       return `"C:\\Program Files\\mosquitto\\mosquitto_pub.exe" -h ${MQTT.host} -p ${MQTT.port} -V mqttv311 --cafile "${MQTT.cafile}" -u ${MQTT.user} -P ${MQTT.pass} -t "${topic}" -m "{\\"cmd\\":\\"check_update\\"}"`;
     }
     async function copyForceCheck(){
       const cmd = buildForceCheckCommand();
       try{ await navigator.clipboard.writeText(cmd); }catch(_){}
-      fwCmdText.textContent = cmd;
-      fwCmdWrap.style.display = 'block';
-      fwMsgEl.textContent = 'Command copied. Paste into Command Prompt to make the device check now.';
-      log('Copied force-check command to clipboard.');
+      els.fwCmdText.textContent = cmd;
+      els.fwCmdWrap.style.display = 'block';
+      els.fwMsg.textContent = 'Command copied. Paste into Command Prompt.';
+      log('Force-check command copied.');
     }
 
-    // Auth/UI wiring
+    // --- auth + UI wiring ---
     async function refreshAuthUI(){
       const { data: { session } } = await sb.auth.getSession();
       const authed = !!session;
-      authEl.style.display = authed ? 'none' : 'block';
-      appEl.style.display  = authed ? 'block' : 'none';
-      if (authed){
-        await load();
-        await refreshFirmwareCompare();
-      }
+      els.auth.style.display = authed ? 'none' : 'block';
+      els.app.style.display  = authed ? 'block' : 'none';
+      if (authed){ await load(); await refreshFirmwareCompare(); }
     }
-    document.getElementById('refresh').addEventListener('click', async () => { await load(); await refreshFirmwareCompare(); });
-    rangeSel.addEventListener('change', async () => { await load(); await refreshFirmwareCompare(); });
-    fwCheckBtn.addEventListener('click', refreshFirmwareCompare);
-    fwForceBtn.addEventListener('click', copyForceCheck);
+    els.refresh.addEventListener('click', async ()=>{ await load(); await refreshFirmwareCompare(); });
+    els.range.addEventListener('change', async ()=>{ await load(); await refreshFirmwareCompare(); });
+    els.fwCheckBtn.addEventListener('click', refreshFirmwareCompare);
+    els.fwForceBtn.addEventListener('click', copyForceCheck);
 
-    document.getElementById('signin').addEventListener('click', async () => {
-      authMsgEl.textContent = '';
-      const { error } = await sb.auth.signInWithPassword({ email: emailEl.value.trim(), password: passwordEl.value });
-      if (error){ authMsgEl.textContent = error.message; return; }
+    els.signin.addEventListener('click', async ()=>{
+      els.authMsg.textContent = '';
+      const { error } = await sb.auth.signInWithPassword({ email: els.email.value.trim(), password: els.password.value });
+      if (error){ els.authMsg.textContent = error.message; return; }
       await refreshAuthUI();
     });
-    signoutBtn.addEventListener('click', async () => { await sb.auth.signOut(); await refreshAuthUI(); });
+    els.signout.addEventListener('click', async ()=>{ await sb.auth.signOut(); await refreshAuthUI(); });
 
-    // Start + auto-refresh
+    // start + periodic refresh
     refreshAuthUI();
-    setInterval(async () => { await load(); await refreshFirmwareCompare(); }, 10000);
-
-    // RSSI helper
-    function rssiLabel(dbm){ if (dbm>=-60) return 'Excellent'; if (dbm>=-67) return 'Very good'; if (dbm>=-75) return 'Good'; if (dbm>=-82) return 'Fair'; if (dbm>=-90) return 'Poor'; return 'Very poor'; }
+    setInterval(async ()=>{ await load(); await refreshFirmwareCompare(); }, 10000);
   </script>
 </body>
 </html>
