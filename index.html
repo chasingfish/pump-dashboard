@@ -5,25 +5,25 @@
   <title>Pump Readings (MVP)</title>
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <style>
-    body { font: 14px/1.4 system-ui, -apple-system, Segoe UI, Roboto, sans-serif; margin: 20px; color:#111; }
-    .row { display:flex; flex-wrap:wrap; gap:10px; align-items:center; margin-bottom:12px; }
-    button, select, input { padding:8px 10px; font: inherit; }
+    body { font: 14px/1.4 system-ui, -apple-system, Segoe UI, Roboto, sans-serif; margin: 20px; }
+    .row { display:flex; flex-wrap: wrap; gap:10px; align-items:center; margin-bottom:12px; }
+    button { padding:8px 12px; cursor:pointer; }
     table { border-collapse: collapse; width:100%; }
     th, td { border:1px solid #ddd; padding:8px; }
     th { background:#f7f7f7; text-align:left; }
-    .pill { padding:2px 8px; border-radius:12px; display:inline-block; border:1px solid transparent; }
-    .green { background:#e6f7ec; color:#156d2f; border-color:#bde5c8; }
-    .red { background:#fde8e8; color:#9b1c1c; border-color:#f5c2c2; }
+    .pill { padding:2px 8px; border-radius:12px; display:inline-block; }
+    .green { background:#e6f7ec; color:#156d2f; }
+    .red   { background:#fde8e8; color:#9b1c1c; }
     .muted { color:#666; }
-    .cards { display:grid; grid-template-columns: repeat(auto-fit,minmax(200px,1fr)); gap:12px; margin:10px 0 18px; }
-    .card { border:1px solid #e5e5e5; border-radius:10px; padding:10px 12px; background:#fff; }
-    .k { font-size:12px; color:#555; }
-    .v { font-weight:600; }
-    canvas { max-width:100%; background:#fff; border:1px solid #eee; border-radius:10px; padding:6px; }
+    .panel { border:1px solid #eee; border-radius:10px; padding:12px; margin-bottom:16px; box-shadow:0 1px 2px rgba(0,0,0,0.04); }
+    .kv { display:grid; grid-template-columns: 160px 1fr; gap:6px 10px; align-items:center; }
+    .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace; }
+    .small { font-size:12px; }
+    .ok    { color:#156d2f; }
+    .warn  { color:#9b6b00; }
   </style>
 </head>
 <body>
-
   <!-- Auth panel (hidden when signed in) -->
   <div id="auth" style="margin-bottom:16px; display:none;">
     <h2>Sign in</h2>
@@ -51,41 +51,54 @@
       <button id="signout" title="Sign out of this browser">Sign out</button>
     </div>
 
-    <div class="cards">
-      <div class="card"><div class="k">Latest status</div><div id="latest" class="pill">—</div></div>
-      <div class="card"><div class="k">Rows</div><div id="count" class="v">0</div></div>
-      <div class="card"><div class="k">Signal health</div><div id="signal" class="pill">—</div></div>
-      <div class="card"><div class="k">Last connected</div><div id="lastconn" class="v">—</div></div>
-      <div class="card"><div class="k">Last seen</div><div id="lastseen" class="v">—</div></div>
-      <div class="card"><div class="k">Wi-Fi now</div><div id="rssiNow" class="v">—</div></div>
-      <div class="card"><div class="k">Latest Temp A (°C)</div><div id="latestA" class="v">—</div></div>
-      <div class="card"><div class="k">Latest Temp B (°C)</div><div id="latestB" class="v">—</div></div>
+    <!-- Firmware panel -->
+    <div class="panel">
+      <h3 style="margin-top:0;">Firmware</h3>
+      <div class="kv">
+        <div class="muted">Current device FW</div>
+        <div><span id="fwCurrent" class="mono">—</span></div>
+
+        <div class="muted">Manifest FW</div>
+        <div><span id="fwManifest" class="mono">—</span></div>
+
+        <div class="muted">Update available</div>
+        <div><span id="fwUpdateFlag" class="pill">—</span></div>
+      </div>
+      <div class="row" style="margin-top:10px;">
+        <button id="fwCheckBtn" title="Fetch manifest.json and compare">Check (compare)</button>
+        <button id="fwForceBtn" title="Copies a mosquitto command that makes the device check right now">Force device to check now</button>
+        <span id="fwMsg" class="muted small"></span>
+      </div>
+      <div id="fwCmdWrap" class="small mono" style="display:none; margin-top:8px;">
+        <div class="muted">Copied to clipboard:</div>
+        <div id="fwCmdText"></div>
+      </div>
     </div>
 
-    <h3>State (GREEN/RED)</h3>
-    <canvas id="chartState" height="140"></canvas>
-
-    <div class="row" style="gap:20px; width:100%; margin-top:16px;">
-      <div style="flex:1; min-width:260px;">
-        <h3>Temp A (°C)</h3>
-        <canvas id="chartA" height="160"></canvas>
-      </div>
-      <div style="flex:1; min-width:260px;">
-        <h3>Temp B (°C)</h3>
-        <canvas id="chartB" height="160"></canvas>
-      </div>
+    <div class="row">
+      <div>Latest: <span id="latest" class="pill"></span></div>
+      <div>Total rows: <strong id="count">0</strong></div>
+      <div>Signal: <span id="signal" class="pill"></span></div>
+      <div>Last connected: <span id="lastconn">—</span></div>
+      <div>Last seen: <span id="lastseen">—</span></div>
+      <div>Wi-Fi: <span id="rssiNow">—</span></div>
+      <div>Latest Temp A: <span id="tempALatest">—</span></div>
+      <div>Latest Temp B: <span id="tempBLatest">—</span></div>
     </div>
 
-    <h3 style="margin-top:18px;">Recent rows</h3>
-    <table>
+    <canvas id="chartA" height="140"></canvas>
+    <canvas id="chartB" height="140" style="margin-top:14px;"></canvas>
+
+    <table style="margin-top:16px;">
       <thead>
         <tr>
           <th>Time (UTC)</th>
           <th>Device</th>
           <th>Status</th>
-          <th>Temp A (°C)</th>
-          <th>Temp B (°C)</th>
+          <th>Temp A °C</th>
+          <th>Temp B °C</th>
           <th>RSSI</th>
+          <th>FW</th>
         </tr>
       </thead>
       <tbody id="rows"></tbody>
@@ -99,9 +112,54 @@
     const SUPABASE_URL = "https://ojomcciunusemwszdnrl.supabase.co";
     const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im9qb21jY2l1bnVzZW13c3pkbnJsIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTQ3MTUyODYsImV4cCI6MjA3MDI5MTI4Nn0.U7gKI4QOklKkSq_Jbfxm6hQBrvS4JipV7z6KtIl1kz8";
 
-    const sb = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
-    let chartState, chartA, chartB;
+    // Public manifest in Supabase Storage (same bucket as firmware.bin)
+    const MANIFEST_URL = "https://ojomcciunusemwszdnrl.supabase.co/storage/v1/object/public/ota/manifest.json";
 
+    // Optional: build a copy-to-clipboard mosquitto command for Windows CMD
+    const MQTT = {
+      host: "3614c4f5a4b94a56a45e17893c67c2d7.s1.eu.hivemq.cloud",
+      port: 8883,
+      user: "aug25",
+      pass: "f71pSt1cK",
+      cafile: "C:\\certs\\cacert.pem",
+      devId: "pump-1",
+      topicCmd: (id) => `pump/uv/cmd/${id}`
+    };
+
+    const sb = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+
+    // UI els
+    const rangeSel = document.getElementById('range');
+    const rowsEl = document.getElementById('rows');
+    const latestEl = document.getElementById('latest');
+    const countEl = document.getElementById('count');
+    const signalEl = document.getElementById('signal');
+    const lastConnEl = document.getElementById('lastconn');
+    const lastSeenEl = document.getElementById('lastseen');
+    const rssiNowEl = document.getElementById('rssiNow');
+    const tempALatestEl = document.getElementById('tempALatest');
+    const tempBLatestEl = document.getElementById('tempBLatest');
+
+    const statusEl = document.getElementById('status');
+    const authEl = document.getElementById('auth');
+    const appEl = document.getElementById('app');
+    const emailEl = document.getElementById('email');
+    const passwordEl = document.getElementById('password');
+    const signinBtn = document.getElementById('signin');
+    const authMsgEl = document.getElementById('authMsg');
+    const signoutBtn = document.getElementById('signout');
+
+    // Firmware panel els
+    const fwCurrentEl = document.getElementById('fwCurrent');
+    const fwManifestEl = document.getElementById('fwManifest');
+    const fwUpdateFlagEl = document.getElementById('fwUpdateFlag');
+    const fwCheckBtn = document.getElementById('fwCheckBtn');
+    const fwForceBtn = document.getElementById('fwForceBtn');
+    const fwMsgEl = document.getElementById('fwMsg');
+    const fwCmdWrap = document.getElementById('fwCmdWrap');
+    const fwCmdText = document.getElementById('fwCmdText');
+
+    let chartA, chartB;
     function rssiLabel(dbm) {
       if (dbm >= -60) return 'Excellent';
       if (dbm >= -67) return 'Very good';
@@ -115,118 +173,66 @@
       const ageMs = Date.now() - new Date(tsIso).getTime();
       return ageMs <= seconds * 1000;
     }
-    function parseRawTemps(raw) {
-      if (!raw) return { A:null, B:null };
-      try {
-        const obj = (typeof raw === 'string') ? JSON.parse(raw) : raw;
-        const A = (obj.temp_pump_a_c != null && !Number.isNaN(obj.temp_pump_a_c)) ? Number(obj.temp_pump_a_c) : null;
-        const B = (obj.temp_pump_b_c != null && !Number.isNaN(obj.temp_pump_b_c)) ? Number(obj.temp_pump_b_c) : null;
-        return { A, B };
-      } catch { return { A:null, B:null }; }
-    }
-    function latestNonNull(data, selector) {
-      for (const r of data) {
-        const v = selector(r);
-        if (v != null) return v;
+    function pick(obj, ...keys) {
+      for (const k of keys) {
+        if (obj && obj[k] != null) return obj[k];
       }
       return null;
     }
-
-    const rangeSel  = document.getElementById('range');
-    const rowsEl    = document.getElementById('rows');
-    const latestEl  = document.getElementById('latest');
-    const countEl   = document.getElementById('count');
-    const signalEl  = document.getElementById('signal');
-    const lastConnEl= document.getElementById('lastconn');
-    const lastSeenEl= document.getElementById('lastseen');
-    const rssiNowEl = document.getElementById('rssiNow');
-    const latestAEl = document.getElementById('latestA');
-    const latestBEl = document.getElementById('latestB');
-    const statusEl  = document.getElementById('status');
-    const authEl    = document.getElementById('auth');
-    const appEl     = document.getElementById('app');
-    const emailEl   = document.getElementById('email');
-    const passwordEl= document.getElementById('password');
-    const signinBtn = document.getElementById('signin');
-    const authMsgEl = document.getElementById('authMsg');
-    const signoutBtn= document.getElementById('signout');
-
-    function renderStateChart(rows) {
-      const ordered = rows.slice().reverse();
-      const labels = ordered.map(r => new Date(r.ts).toLocaleTimeString()); // strings (category scale)
-      const values = ordered.map(r => r.uv_status === 'GREEN' ? 1 : 0);
-      const ctx = document.getElementById('chartState').getContext('2d');
-      if (!chartState) {
-        chartState = new Chart(ctx, {
-          type: 'line',
-          data: { labels, datasets: [{ data: values, stepped: true, pointRadius: 0, borderWidth: 2, fill: false }] },
-          options: { animation: false, plugins: { legend: { display: false } },
-            scales: { y: { min: -0.1, max: 1.1, ticks: { callback: v => (v === 1 ? 'GREEN' : v === 0 ? 'RED' : '') } } } }
-        });
-      } else {
-        chartState.data.labels = labels;
-        chartState.data.datasets[0].data = values;
-        chartState.update('none');
-      }
+    function cmpSemver(a, b) {
+      const pa = String(a).split('.').map(n=>parseInt(n,10));
+      const pb = String(b).split('.').map(n=>parseInt(n,10));
+      for (let i=0;i<3;i++){ const x=pa[i]||0, y=pb[i]||0; if (x!==y) return x<y?-1:1; }
+      return 0;
     }
 
-    function renderTempCharts(rows) {
-      const ordered = rows.slice().reverse();
-      const labels = ordered.map(r => new Date(r.ts).toLocaleTimeString()); // strings (category scale)
-      const seriesA = [];
-      const seriesB = [];
-      for (const r of ordered) {
-        const { A, B } = parseRawTemps(r.raw);
-        seriesA.push(A);
-        seriesB.push(B);
-      }
+    async function fetchManifest() {
+      // avoid cache
+      const url = MANIFEST_URL + '?cb=' + Date.now();
+      const res = await fetch(url, { cache: 'no-store' });
+      if (!res.ok) throw new Error('manifest fetch ' + res.status);
+      return res.json();
+    }
 
-      // Latest A/B = first non-null in newest-first data
-      const latestA = latestNonNull(rows, r => parseRawTemps(r.raw).A);
-      const latestB = latestNonNull(rows, r => parseRawTemps(r.raw).B);
-      latestAEl.textContent = (latestA != null) ? latestA.toFixed(2) : '—';
-      latestBEl.textContent = (latestB != null) ? latestB.toFixed(2) : '—';
+    function renderCharts(rows) {
+      const ordered = rows.slice().reverse(); // oldest → newest
+      const labels = ordered.map(r => new Date(r.ts).toLocaleTimeString());
 
-      const aCtx = document.getElementById('chartA').getContext('2d');
-      const bCtx = document.getElementById('chartB').getContext('2d');
-      const common = {
-        type: 'line',
-        options: {
-          animation: false,
-          plugins: { legend: { display: false } },
-          scales: {
-            x: { ticks: { autoSkip: true, maxTicksLimit: 10 } },
-            y: { title: { display: true, text: '°C' } }
-          }
-        }
+      // A & B with graceful fallback
+      const valsA = ordered.map(r => {
+        const v = pick(r, 'temp_pump_a_c','temp_a','temp_c');
+        return (v==null)?null:Number(v);
+      });
+      const valsB = ordered.map(r => {
+        const v = pick(r, 'temp_pump_b_c','temp_b');
+        return (v==null)?null:Number(v);
+      });
+
+      const ctxA = document.getElementById('chartA').getContext('2d');
+      const ctxB = document.getElementById('chartB').getContext('2d');
+
+      const dsA = [{ data: valsA, spanGaps: true, pointRadius: 0, borderWidth: 2, label:'Temp A (°C)' }];
+      const dsB = [{ data: valsB, spanGaps: true, pointRadius: 0, borderWidth: 2, label:'Temp B (°C)' }];
+
+      const opts = {
+        animation: false,
+        plugins: { legend: { display: true } },
+        scales: { y: { title:{ display:true, text:'°C' } } }
       };
 
       if (!chartA) {
-        chartA = new Chart(aCtx, { ...common,
-          data: { labels, datasets: [{ data: seriesA, pointRadius: 0, borderWidth: 2, spanGaps: true, fill: false }] }
-        });
+        chartA = new Chart(ctxA, { type:'line', data:{ labels, datasets: dsA }, options: opts });
       } else {
-        chartA.data.labels = labels;
-        chartA.data.datasets[0].data = seriesA;
-        chartA.update('none');
+        chartA.data.labels = labels; chartA.data.datasets[0].data = valsA; chartA.update('none');
       }
-
       if (!chartB) {
-        chartB = new Chart(bCtx, { ...common,
-          data: { labels, datasets: [{ data: seriesB, pointRadius: 0, borderWidth: 2, spanGaps: true, fill: false }] }
-        });
+        chartB = new Chart(ctxB, { type:'line', data:{ labels, datasets: dsB }, options: opts });
       } else {
-        chartB.data.labels = labels;
-        chartB.data.datasets[0].data = seriesB;
-        chartB.update('none');
+        chartB.data.labels = labels; chartB.data.datasets[0].data = valsB; chartB.update('none');
       }
     }
 
-    function setSignalBad(msg) { signalEl.textContent = msg; signalEl.className = 'pill red'; }
-    function setSignalOk(msg) { signalEl.textContent = msg; signalEl.className = 'pill green'; }
-
     async function load() {
-      // Only load when authenticated
       const { data: { session } } = await sb.auth.getSession();
       if (!session) return;
 
@@ -236,13 +242,12 @@
       const hours = parseInt(rangeSel.value, 10);
       const fromIso = new Date(Date.now() - hours * 3600 * 1000).toISOString();
 
-      // pull RAW so we can parse temp_pump_a_c / temp_pump_b_c
       const { data, error } = await sb
         .from('pump_readings')
-        .select('device_id, ts, uv_status, temp_c, rssi, raw')
+        .select('device_id, ts, uv_status, temp_pump_a_c, temp_pump_b_c, temp_c, rssi, fw')
         .gte('ts', fromIso)
         .order('ts', { ascending: false })
-        .limit(1000);
+        .limit(500);
 
       if (error) { statusEl.textContent = 'Error: ' + error.message; return; }
 
@@ -250,22 +255,33 @@
 
       if (data.length) {
         const latest = data[0];
-        latestEl.textContent = latest.uv_status;
+        latestEl.textContent = latest.uv_status || '—';
         latestEl.className = 'pill ' + (latest.uv_status === 'GREEN' ? 'green' : 'red');
 
+        // Fill Latest Temps (A/B with fallback)
+        const tA = pick(latest, 'temp_pump_a_c','temp_a','temp_c');
+        const tB = pick(latest, 'temp_pump_b_c','temp_b');
+        tempALatestEl.textContent = (tA==null)?'—':(+tA).toFixed(2)+' °C';
+        tempBLatestEl.textContent = (tB==null)?'—':(+tB).toFixed(2)+' °C';
+
+        // Current FW in firmware panel
+        fwCurrentEl.textContent = latest.fw || '—';
+
+        // Device status table (optional extra context)
         const did = latest.device_id;
         const { data: ds, error: dserr } = await sb
           .from('device_status')
           .select('last_seen_ts, last_online_ts, online')
           .eq('device_id', did)
           .single();
+
         if (!dserr && ds) {
           lastConnEl.textContent = ds.last_online_ts ? new Date(ds.last_online_ts).toLocaleString() : (ds.online ? 'now' : '—');
           lastSeenEl.textContent = ds.last_seen_ts ? new Date(ds.last_seen_ts).toLocaleString() : (ds.online ? 'now' : '—');
           const onlineRecent = isRecent(ds.last_seen_ts, 120);
           const freshRows = data.filter(r => r.rssi != null && isRecent(r.ts, 120)).slice(0, 5);
           if (onlineRecent && freshRows.length) {
-            const avg = freshRows.reduce((s, r) => s + Number(r.rssi), 0) / freshRows.length;
+            const avg = freshRows.reduce((s,r)=>s+Number(r.rssi), 0)/freshRows.length;
             rssiNowEl.textContent = `${avg.toFixed(0)} dBm (${rssiLabel(avg)})`;
           } else {
             rssiNowEl.textContent = 'No signal';
@@ -273,50 +289,105 @@
         } else {
           lastConnEl.textContent = '—';
           lastSeenEl.textContent = '—';
-          rssiNowEl.textContent = 'No signal';
         }
-
-        const ageMin = Math.floor((Date.now() - new Date(data[0].ts).getTime()) / 60000);
-        if (ageMin <= 10) setSignalOk('OK'); else setSignalBad(`STALE: ${ageMin}m`);
-
       } else {
-        latestEl.textContent = '—';
-        latestEl.className = 'pill';
-        setSignalBad('NO DATA');
+        latestEl.textContent = '—'; latestEl.className = 'pill';
+        fwCurrentEl.textContent = '—';
       }
 
-      // Table rows with parsed A/B
+      // Render rows
       for (const r of data) {
-        const { A, B } = parseRawTemps(r.raw);
         const tr = document.createElement('tr');
+        const A = pick(r,'temp_pump_a_c','temp_a','temp_c');
+        const B = pick(r,'temp_pump_b_c','temp_b');
         tr.innerHTML = `
           <td>${new Date(r.ts).toISOString()}</td>
           <td>${r.device_id}</td>
           <td><span class="pill ${r.uv_status === 'GREEN' ? 'green' : 'red'}">${r.uv_status}</span></td>
-          <td>${A != null ? A.toFixed(2) : ''}</td>
-          <td>${B != null ? B.toFixed(2) : ''}</td>
+          <td>${A==null?'':Number(A).toFixed(2)}</td>
+          <td>${B==null?'':Number(B).toFixed(2)}</td>
           <td>${r.rssi ?? ''}</td>
+          <td class="mono">${r.fw ?? ''}</td>
         `;
         rowsEl.appendChild(tr);
       }
 
-      renderStateChart(data);
-      renderTempCharts(data);
+      renderCharts(data);
 
       statusEl.textContent = 'Last updated: ' + new Date().toLocaleTimeString();
+
+      // Data staleness pill
+      if (data.length) {
+        const ageMs  = Date.now() - new Date(data[0].ts).getTime();
+        const ageMin = Math.floor(ageMs / 60000);
+        const ok = ageMin <= 10;
+        signalEl.textContent = ok ? 'OK' : `STALE: ${ageMin}m`;
+        signalEl.className = 'pill ' + (ok ? 'green' : 'red');
+      } else {
+        signalEl.textContent = 'NO DATA';
+        signalEl.className = 'pill red';
+      }
     }
 
+    async function refreshFirmwareCompare() {
+      fwMsgEl.textContent = 'Fetching manifest…';
+      fwCmdWrap.style.display = 'none';
+      try {
+        const manifest = await fetchManifest();
+        const mver = manifest.version || '—';
+        fwManifestEl.textContent = mver;
+
+        // Use whatever is currently shown as the device version
+        const cur = (fwCurrentEl.textContent || '').trim();
+        if (!cur || cur==='—' || !mver || mver==='—') {
+          fwUpdateFlagEl.textContent = '—';
+          fwUpdateFlagEl.className = 'pill';
+          fwMsgEl.textContent = '';
+          return;
+        }
+        const newer = cmpSemver(cur, mver) < 0;
+        fwUpdateFlagEl.textContent = newer ? 'YES' : 'No';
+        fwUpdateFlagEl.className = 'pill ' + (newer ? 'red' : 'green');
+        fwMsgEl.textContent = newer ? 'New firmware available in manifest.' : 'Device is up to date.';
+      } catch (e) {
+        fwManifestEl.textContent = '—';
+        fwUpdateFlagEl.textContent = '—';
+        fwUpdateFlagEl.className = 'pill';
+        fwMsgEl.textContent = 'Manifest fetch failed.';
+      }
+    }
+
+    function buildForceCheckCommand() {
+      // Windows CMD-friendly single line (no carets)
+      // Requires mosquitto_pub installed locally
+      const topic = MQTT.topicCmd(MQTT.devId);
+      return `"C:\\Program Files\\mosquitto\\mosquitto_pub.exe" -h ${MQTT.host} -p ${MQTT.port} -V mqttv311 --cafile "${MQTT.cafile}" -u ${MQTT.user} -P ${MQTT.pass} -t "${topic}" -m "{\"cmd\":\"check_update\"}"`;
+    }
+
+    async function copyForceCheck() {
+      const cmd = buildForceCheckCommand();
+      try {
+        await navigator.clipboard.writeText(cmd);
+      } catch (_) {
+        // Fallback: show but cannot copy (HTTP/clipboard blocked)
+      }
+      fwCmdText.textContent = cmd;
+      fwCmdWrap.style.display = 'block';
+      fwMsgEl.textContent = 'Command copied. Paste into Command Prompt to make the device check now.';
+    }
+
+    // Auth UI & actions
     async function refreshAuthUI() {
       const { data: { session } } = await sb.auth.getSession();
       const authed = !!session;
       authEl.style.display = authed ? 'none' : 'block';
       appEl.style.display = authed ? 'block' : 'none';
-      if (authed) load();
+      if (authed) {
+        await load();
+        await refreshFirmwareCompare();
+      }
     }
-    document.getElementById('refresh').addEventListener('click', load);
-    rangeSel.addEventListener('change', load);
-
-    document.getElementById('signin').addEventListener('click', async () => {
+    signinBtn.addEventListener('click', async () => {
       authMsgEl.textContent = '';
       const { error } = await sb.auth.signInWithPassword({
         email: emailEl.value.trim(),
@@ -325,15 +396,27 @@
       if (error) { authMsgEl.textContent = error.message; return; }
       await refreshAuthUI();
     });
-
     signoutBtn.addEventListener('click', async () => {
       await sb.auth.signOut();
       await refreshAuthUI();
     });
 
-    // Start
+    document.getElementById('refresh').addEventListener('click', async () => {
+      await load();
+      await refreshFirmwareCompare();
+    });
+    rangeSel.addEventListener('change', async () => {
+      await load();
+      await refreshFirmwareCompare();
+    });
+    fwCheckBtn.addEventListener('click', refreshFirmwareCompare);
+    fwForceBtn.addEventListener('click', copyForceCheck);
+
+    // Start: show either auth or app (session is remembered)
     refreshAuthUI();
-    setInterval(load, 10000);
+
+    // Auto-refresh
+    setInterval(async () => { await load(); await refreshFirmwareCompare(); }, 10000);
   </script>
 </body>
 </html>
