@@ -38,7 +38,7 @@
   </div>
 
   <div id="app" style="display:none;">
-    <h1>Pump Readingsss</h1>
+    <h1>Pump Readings</h1>
 
     <div class="row">
       <label for="range">Time range:</label>
@@ -121,6 +121,16 @@
   <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns"></script>
 
   <script>
+  // ===== Simple error trap so you never get a blank screen =====
+  window.onerror = function(msg, src, line, col, err){
+    const box = document.getElementById('events');
+    if (box) box.textContent = `[${new Date().toLocaleTimeString()}] ERROR: ${msg} @ ${src}:${line}:${col}\n` + box.textContent;
+  };
+  window.addEventListener('unhandledrejection', (e)=>{
+    const box = document.getElementById('events');
+    if (box) box.textContent = `[${new Date().toLocaleTimeString()}] PROMISE ERROR: ${e.reason}\n` + box.textContent;
+  });
+
   // --- CONFIG ---
   const SUPABASE_URL = "https://ojomcciunusemwszdnrl.supabase.co";
   const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im9qb21jY2l1bnVzZW13c3pkbnJsIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTQ3MTUyODYsImV4cCI6MjA3MDI5MTI4Nn0.U7gKI4QOklKkSq_Jbfxm6hQBrvS4JipV7z6KtIl1kz8";
@@ -208,7 +218,7 @@
   }
 
   // ---------- FULL-WINDOW PAGED FETCH ON BOTH FIELDS (ts & inserted_at) ----------
-  async function pageByField(field, fromIso, toIso, pageSize=1000, hardCap=300000){
+  async function pageByField(field, fromIso, toIso, pageSize=2000, hardCap=300000){
     let all = [];
     let lastVal = null;
     while (all.length < hardCap){
@@ -232,31 +242,30 @@
   }
 
   async function fetchWindowBoth(fromIso, toIso){
-    // Run both in sequence (could be parallel) and merge.
     let a = [], b = [], via = [];
     try { a = await pageByField('ts', fromIso, toIso); via.push('ts'); } catch(e){ log(e.message); }
     try { b = await pageByField('inserted_at', fromIso, toIso); via.push('inserted_at'); } catch(e){ log(e.message); }
     const merged = dedupeByTsDev(augmentRows(a).concat(augmentRows(b))).filter(r=>r.$ts);
-    // Keep only exact window with our unified timestamp
     const fromMs = new Date(fromIso).getTime();
     const toMs   = new Date(toIso).getTime();
     const inWin  = merged.filter(r => {
       const t = new Date(r.$ts).getTime();
       return Number.isFinite(t) && t >= fromMs && t <= toMs;
     });
-    // Ascending time for chart
-    inWin.sort((x,y)=> new Date(x.$ts) - new Date(y.$ts));
+    inWin.sort((x,y)=> new Date(x.$ts) - new Date(y.$ts)); // ascending for chart
     return { rows: inWin, via: via.join('+') || 'none' };
   }
 
   // --- data load ---
-  let tempsChart=null;
+  let tempsChart = null; // (single declaration)
 
   async function load(){
     const { data: { session } } = await sb.auth.getSession();
     if (!session){
       log('Not signed in.');
       els.status.textContent = 'Not signed in.';
+      document.getElementById('auth').style.display = 'block';
+      document.getElementById('app').style.display  = 'none';
       return;
     }
 
@@ -268,7 +277,6 @@
     els.status.textContent = `Loading… (${els.range.options[els.range.selectedIndex].text})`;
     log(`Load start: ${fromIso} → ${toIso}`);
 
-    // Fetch full window from BOTH fields to ensure completeness
     const { rows: rowsAll, via } = await fetchWindowBoth(fromIso, toIso);
 
     // Table: latest 200, newest-first
@@ -351,7 +359,6 @@
   }
 
   // --- chart (time scale with explicit [min,max]) ---
-  let tempsChart=null;
   function renderTempsChart(allAsc, fromMs, toMs, unit){
     const A = allAsc
       .filter(r => r.$ta!=null)
