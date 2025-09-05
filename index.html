@@ -38,7 +38,7 @@
   </div>
 
   <div id="app" style="display:none;">
-    <h1>Pump Readfings</h1>
+    <h1>Pump Readingzzzs</h1>
 
     <div class="row">
       <label for="range">Time range:</label>
@@ -385,73 +385,55 @@
   }
 
   // Removed duplicate declaration of tempsChart
-  function renderTempsChart(allAsc, fromMs, toMs, unit) {
-    // Filter out bad timestamps (e.g., 1970)
-    const validRows = allAsc.filter(r => {
-      const t = new Date(r.$ts).getTime();
-      return t > 1609459200000 && t >= fromMs && t <= toMs; // Only after Jan 1, 2021
-    });
+  function renderTempsChart(allAsc, fromMs, toMs, unit){
+    const A = allAsc
+      .filter(r => r.$ta!=null)
+      .map(r => ({ x: new Date(r.$ts).getTime(), y: Number(r.$ta) }))
+      .filter(p => Number.isFinite(p.x) && p.x>=fromMs && p.x<=toMs);
 
-    // Build hourly slots for <=48h, daily slots for longer
-    const slotMs = (unit === 'hour') ? 3600 * 1000 : 24 * 3600 * 1000;
-    const slots = [];
-    for (let t = fromMs; t <= toMs; t += slotMs) {
-      slots.push(t);
-    }
+    const B = allAsc
+      .filter(r => r.$tb!=null)
+      .map(r => ({ x: new Date(r.$ts).getTime(), y: Number(r.$tb) }))
+      .filter(p => Number.isFinite(p.x) && p.x>=fromMs && p.x<=toMs);
 
-    // For each slot, find the latest row in that slot
-    function slotValue(rows, key) {
-      return slots.map((start, i) => {
-        const end = (i + 1 < slots.length) ? slots[i + 1] : toMs + slotMs;
-        const inSlot = rows.filter(r => {
-          const ts = new Date(r.$ts).getTime();
-          return ts >= start && ts < end;
-        });
-        if (inSlot.length) {
-          const latest = inSlot.reduce((a, b) => new Date(a.$ts) > new Date(b.$ts) ? a : b);
-          return { x: start, y: Number(latest[key]) };
-        } else {
-          return { x: start, y: null };
-        }
-      });
-    }
+    const yr = computeYRange([A,B]) || { min: undefined, max: undefined };
 
-    const A = slotValue(validRows.filter(r => r.$ta != null), '$ta');
-    const B = slotValue(validRows.filter(r => r.$tb != null), '$tb');
-
-    const yr = computeYRange([A, B]) || { min: undefined, max: undefined };
     const ctx = document.getElementById('chartTemps').getContext('2d');
+
     const ds = [
-      { data: A, label: 'Temp A (°C)', spanGaps: true, pointRadius: 0, borderWidth: 2, parsing: false },
-      { data: B, label: 'Temp B (°C)', spanGaps: true, pointRadius: 0, borderWidth: 2, parsing: false }
+      { data:A, label:'Temp A (°C)', spanGaps:true, pointRadius:0, borderWidth:2, parsing:false },
+      { data:B, label:'Temp B (°C)', spanGaps:true, pointRadius:0, borderWidth:2, parsing:false }
     ];
+
     const opts = {
-      parsing: false,
-      animation: false,
-      normalized: true,
-      plugins: {
-        legend: { display: true, position: 'top' },
-        decimation: { enabled: true, algorithm: 'lttb', samples: 1000 }
+      parsing:false,
+      animation:false,
+      normalized:true,
+      plugins:{
+        legend:{ display:true, position:'top' },
+        decimation:{ enabled:true, algorithm:'lttb', samples:1000 }
       },
-      scales: {
-        x: {
-          type: 'time',
-          time: { unit },
+      scales:{
+        x:{
+          type:'time',
+          time:{ unit },
           min: fromMs,
           max: toMs,
-          ticks: { maxRotation: 0 }
+          ticks:{ maxRotation:0 }
         },
-        y: {
-          title: { display: true, text: '°C' },
-          beginAtZero: false,
+        y:{
+          title:{ display:true, text:'°C' },
+          beginAtZero:false,
           min: yr.min,
           max: yr.max
         }
       }
     };
+
     const data = { datasets: ds };
-    if (!tempsChart) {
-      tempsChart = new Chart(ctx, { type: 'line', data, options: opts });
+
+    if (!tempsChart){
+      tempsChart = new Chart(ctx, { type:'line', data, options:opts });
     } else {
       tempsChart.options.scales.x.min = fromMs;
       tempsChart.options.scales.x.max = toMs;
