@@ -2,23 +2,26 @@
 <html>
 <head>
   <meta charset="utf-8" />
-  <title>Pump Readings (MVP)</title>
+  <title>Pump Readings</title>
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <style>
-    body { font:14px/1.4 system-ui,-apple-system,Segoe UI,Roboto,sans-serif; margin:20px; }
+    :root { --fg:#111; --muted:#666; --line:#e9e9e9; --bg:#fff; }
+    body { font:14px/1.5 system-ui,-apple-system,Segoe UI,Roboto,sans-serif; color:var(--fg); background:var(--bg); margin:20px; }
+    h1 { margin:0 0 10px; font-size:20px; }
     .row { display:flex; flex-wrap:wrap; gap:10px; align-items:center; margin-bottom:12px; }
-    button { padding:8px 12px; cursor:pointer; }
+    .panel { border:1px solid #eee; border-radius:10px; padding:12px; margin:14px 0; box-shadow:0 1px 2px rgba(0,0,0,0.04); }
+    .kv { display:grid; grid-template-columns: 160px 1fr; gap:6px 10px; align-items:center; }
+    .pill { padding:2px 8px; border-radius:12px; display:inline-block; border:1px solid var(--line); }
+    .green { background:#e6f7ec; color:#156d2f; }
+    .red   { background:#fde8e8; color:#9b1c1c; }
+    .muted { color:var(--muted); }
+    .small { font-size:12px; }
+    .mono { font-family: ui-monospace,SFMono-Regular,Menlo,Consolas,"Liberation Mono",monospace; }
+    button, input, select { padding:8px 10px; border:1px solid var(--line); border-radius:8px; background:#fff; }
+    button { cursor:pointer; }
     table { border-collapse: collapse; width:100%; }
     th, td { border:1px solid #ddd; padding:8px; }
     th { background:#f7f7f7; text-align:left; }
-    .pill { padding:2px 8px; border-radius:12px; display:inline-block; }
-    .green { background:#e6f7ec; color:#156d2f; }
-    .red   { background:#fde8e8; color:#9b1c1c; }
-    .muted { color:#666; }
-    .panel { border:1px solid #eee; border-radius:10px; padding:12px; margin-bottom:16px; box-shadow:0 1px 2px rgba(0,0,0,0.04); }
-    .kv { display:grid; grid-template-columns: 160px 1fr; gap:6px 10px; align-items:center; }
-    .mono { font-family: ui-monospace,SFMono-Regular,Menlo,Consolas,"Liberation Mono",monospace; }
-    .small { font-size:12px; }
     #events { white-space:pre-wrap; max-height:160px; overflow:auto; border:1px solid #eee; border-radius:8px; padding:8px; background:#fafafa; }
     #schema { word-break: break-all; }
   </style>
@@ -35,17 +38,19 @@
   </div>
 
   <div id="app" style="display:none;">
-    <h1>Pump Readings (MVP23)</h1>
+    <h1>Pump Readings</h1>
 
     <div class="row">
-      <label>Time range:</label>
+      <label for="range">Time range:</label>
       <select id="range">
-        <option value="6">Last 6 hours</option>
-        <option value="24" selected>Last 24 hours</option>
-        <option value="168">Last 7 days</option>
+        <option value="24h" selected>Last 24 hours</option>
+        <option value="7d">Last 1 week</option>
+        <option value="30d">Last 30 days</option>
+        <option value="90d">Last 90 days</option>
       </select>
       <button id="refresh">Refresh</button>
-      <div id="status" class="muted"></div>
+      <div id="status" class="muted small"></div>
+      <div style="flex:1"></div>
       <button id="signout" title="Sign out of this browser">Sign out</button>
     </div>
 
@@ -84,8 +89,8 @@
       <div>Latest Temp B: <span id="tempBLatest">—</span></div>
     </div>
 
-    <canvas id="chartA" height="140"></canvas>
-    <canvas id="chartB" height="140" style="margin-top:14px;"></canvas>
+    <!-- Single combined chart -->
+    <canvas id="chartTemps" height="160"></canvas>
 
     <table style="margin-top:16px;">
       <thead>
@@ -112,241 +117,275 @@
   <script src="https://unpkg.com/@supabase/supabase-js@2"></script>
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
   <script>
-    // --- CONFIG ---
-    const SUPABASE_URL = "https://ojomcciunusemwszdnrl.supabase.co";
-    const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im9qb21jY2l1bnVzZW13c3pkbnJsIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTQ3MTUyODYsImV4cCI6MjA3MDI5MTI4Nn0.U7gKI4QOklKkSq_Jbfxm6hQBrvS4JipV7z6KtIl1kz8";
-    const MANIFEST_URL = "https://ojomcciunusemwszdnrl.supabase.co/storage/v1/object/public/ota/manifest.json";
-    const sb = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+  // --- CONFIG ---
+  const SUPABASE_URL = "https://ojomcciunusemwszdnrl.supabase.co";
+  const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im9qb21jY2l1bnVzZW13c3pkbnJsIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTQ3MTUyODYsImV4cCI6MjA3MDI5MTI4Nn0.U7gKI4QOklKkSq_Jbfxm6hQBrvS4JipV7z6KtIl1kz8";
+  const MANIFEST_URL = "https://ojomcciunusemwszdnrl.supabase.co/storage/v1/object/public/ota/manifest.json";
+  const sb = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
-    const MQTT = {
-      host: "3614c4f5a4b94a56a45e17893c67c2d7.s1.eu.hivemq.cloud",
-      port: 8883,
-      user: "aug25",
-      pass: "f71pSt1cK",
-      cafile: "C:\\certs\\cacert.pem",
-      devId: "pump-1",
-      topicCmd: (id) => `pump/uv/cmd/${id}`
+  const MQTT = {
+    host: "3614c4f5a4b94a56a45e17893c67c2d7.s1.eu.hivemq.cloud",
+    port: 8883,
+    user: "aug25",
+    pass: "f71pSt1cK",
+    cafile: "C:\\\\certs\\\\cacert.pem",
+    devId: "pump-1",
+    topicCmd: (id) => `pump/uv/cmd/${id}`
+  };
+
+  // --- UI refs ---
+  const els = Object.fromEntries([
+    'auth','app','email','password','signin','authMsg','signout','range','refresh','status',
+    'rows','latest','count','signal','lastconn','lastseen','rssiNow','tempALatest','tempBLatest',
+    'fwCurrent','fwManifest','fwUpdateFlag','fwCheckBtn','fwForceBtn','fwMsg','fwCmdWrap','fwCmdText',
+    'events','schema'
+  ].map(id => [id, document.getElementById(id)]));
+
+  function log(m){ els.events.textContent = `[${new Date().toLocaleTimeString()}] ${m}\n` + els.events.textContent; }
+
+  // --- helpers ---
+  function parseRaw(row){
+    try{
+      if (typeof row.raw === 'string') return JSON.parse(row.raw);
+      if (row.raw && typeof row.raw === 'object') return row.raw;
+    }catch(_){}
+    return null;
+  }
+
+  function augmentRows(rows){
+    return rows.map(r=>{
+      const o = parseRaw(r) || {};
+      const a = { ...r };
+      a.$fw  = r.fw ?? o.fw ?? o.fw_version ?? null;
+      a.$ta  = r.temp_pump_a_c ?? o.temp_pump_a_c ?? r.temp_a ?? o.temp_a ?? r.temp_c ?? o.temp_c ?? null;
+      a.$tb  = r.temp_pump_b_c ?? o.temp_pump_b_c ?? r.temp_b ?? o.temp_b ?? null;
+      a.$uv  = r.uv_status ?? o.uv_status ?? r.status ?? o.status ?? null;
+      a.$rssi= r.rssi ?? o.rssi ?? r.wifi_rssi ?? o.wifi_rssi ?? null;
+      a.$ts  = r.ts ?? r.inserted_at ?? o.ts ?? o.time ?? null;
+      a.$dev = r.device_id ?? r.device ?? o.device_id ?? o.device ?? null;
+      return a;
+    });
+  }
+
+  function describeDetection(rows){
+    if (!rows.length){ els.schema.textContent='No rows found.'; return; }
+    const k = Object.keys(rows[0]).join(', ');
+    const s = augmentRows([rows[0]])[0];
+    els.schema.textContent =
+      `Resolved → ts:${s.$ts?'✓':'—'}, fw:${s.$fw?'✓':'—'}, A:${s.$ta!=null?'✓':'—'}, B:${s.$tb!=null?'✓':'—'}, rssi:${s.$rssi!=null?'✓':'—'}, status:${s.$uv?'✓':'—'}, device:${s.$dev?'✓':'—'} | Raw keys: ${k}`;
+  }
+
+  function rssiLabel(dbm){ if (dbm>=-60) return 'Excellent'; if (dbm>=-67) return 'Very good'; if (dbm>=-75) return 'Good'; if (dbm>=-82) return 'Fair'; if (dbm>=-90) return 'Poor'; return 'Very poor'; }
+
+  function isRecent(tsIso, sec){ if (!tsIso) return false; return (Date.now()-new Date(tsIso).getTime()) <= sec*1000; }
+
+  function hoursFromRangeValue(v){
+    if (v.endsWith('h')) return parseInt(v,10);
+    const d = parseInt(v,10);
+    return d * 24; // '7d','30d','90d'
+  }
+
+  // --- data load ---
+  let tempsChart=null;
+
+  async function load(){
+    const { data: { session } } = await sb.auth.getSession();
+    if (!session){ log('Not signed in.'); return; }
+
+    const hours = hoursFromRangeValue(els.range.value);
+    const fromIso = new Date(Date.now() - hours*3600*1000).toISOString();
+
+    els.status.textContent = `Loading… (${els.range.options[els.range.selectedIndex].text})`;
+    log(`Load start (from ${fromIso})`);
+
+    // Grab rows where either ts >= fromIso OR inserted_at >= fromIso (covers older schemas)
+    let q = sb.from('pump_readings')
+      .select('*')
+      .or(`ts.gte.${fromIso},inserted_at.gte.${fromIso}`)
+      .order('ts', { ascending:false })
+      .limit(5000); // plenty for 90d at ~60s cadence with device downtime
+
+    const { data, error } = await q;
+    if (error){ els.status.textContent = 'Error: ' + error.message; log('Error: ' + error.message); return; }
+
+    const rows = augmentRows(data)
+      .filter(r => r.$ts) // ensure we have a timestamp to plot
+      .sort((a,b)=> new Date(b.$ts).getTime() - new Date(a.$ts).getTime());
+
+    describeDetection(data);
+    els.count.textContent = rows.length;
+
+    // latest badges
+    if (rows.length){
+      const latest = rows[0];
+      els.latest.textContent = latest.$uv || '—';
+      els.latest.className = 'pill ' + ((latest.$uv==='GREEN') ? 'green' : 'red');
+      els.tempALatest.textContent = (latest.$ta==null)?'—':(+latest.$ta).toFixed(2)+' °C';
+      els.tempBLatest.textContent = (latest.$tb==null)?'—':(+latest.$tb).toFixed(2)+' °C';
+      els.fwCurrent.textContent = latest.$fw || '—';
+
+      // device_status summary (best effort)
+      try{
+        const did = latest.$dev;
+        const { data: ds } = await sb.from('device_status').select('last_seen_ts,last_online_ts,online').eq('device_id', did).single();
+        if (ds){
+          els.lastconn.textContent = ds.last_online_ts ? new Date(ds.last_online_ts).toLocaleString() : (ds.online?'now':'—');
+          els.lastseen.textContent = ds.last_seen_ts ? new Date(ds.last_seen_ts).toLocaleString() : (ds.online?'now':'—');
+          const fresh = rows.filter(r => r.$rssi!=null && isRecent(r.$ts,120)).slice(0,5);
+          if (fresh.length){
+            const avg = fresh.reduce((s,r)=>s+Number(r.$rssi),0)/fresh.length;
+            els.rssiNow.textContent = `${avg.toFixed(0)} dBm (${rssiLabel(avg)})`;
+          } else els.rssiNow.textContent = 'No signal';
+        }
+      }catch(_){}
+    } else {
+      els.latest.textContent = '—'; els.latest.className='pill';
+      els.fwCurrent.textContent = '—'; els.rssiNow.textContent = '—';
+    }
+
+    // table (descending time)
+    els.rows.innerHTML = '';
+    for (const r of rows){
+      const tr = document.createElement('tr');
+      tr.innerHTML = `
+        <td>${new Date(r.$ts).toISOString()}</td>
+        <td>${r.$dev ?? ''}</td>
+        <td><span class="pill ${(r.$uv==='GREEN')?'green':'red'}">${r.$uv ?? ''}</span></td>
+        <td>${r.$ta==null?'':Number(r.$ta).toFixed(2)}</td>
+        <td>${r.$tb==null?'':Number(r.$tb).toFixed(2)}</td>
+        <td>${r.$rssi ?? ''}</td>
+        <td class="mono">${r.$fw ?? ''}</td>
+      `;
+      els.rows.appendChild(tr);
+    }
+
+    // chart (ascending time for line continuity)
+    renderTempsChart(rows.slice().reverse());
+
+    // staleness badge
+    if (rows.length){
+      const ageMin = Math.floor((Date.now() - new Date(rows[0].$ts).getTime())/60000);
+      const fresh = ageMin <= 10;
+      els.signal.textContent = fresh ? 'OK' : `STALE: ${ageMin}m`;
+      els.signal.className = 'pill ' + (fresh ? 'green' : 'red');
+    } else {
+      els.signal.textContent = 'NO DATA';
+      els.signal.className = 'pill red';
+    }
+
+    els.status.textContent = `Last updated: ${new Date().toLocaleTimeString()} • ${els.range.options[els.range.selectedIndex].text}`;
+    log('Load done: rows=' + rows.length);
+  }
+
+  // --- chart (Temp A & B together) ---
+  function renderTempsChart(ordered){
+    const labels = ordered.map(r => new Date(r.$ts));
+    const A = ordered.map(r => r.$ta==null?null:Number(r.$ta));
+    const B = ordered.map(r => r.$tb==null?null:Number(r.$tb));
+
+    const ctx = document.getElementById('chartTemps').getContext('2d');
+
+    const ds = [];
+    ds.push({ data:A, label:'Temp A (°C)', spanGaps:true, pointRadius:0, borderWidth:2 });
+    ds.push({ data:B, label:'Temp B (°C)', spanGaps:true, pointRadius:0, borderWidth:2 });
+
+    const opts = {
+      animation:false,
+      parsing:false,
+      plugins:{ legend:{ display:true, position:'top' } },
+      scales:{
+        x:{
+          type:'time', // will fall back to category if adapter not present; labels still render
+          time:{ tooltipFormat:'PPpp' },
+          ticks:{ autoSkip:true, maxRotation:0 }
+        },
+        y:{ title:{ display:true, text:'°C' }, beginAtZero:false }
+      }
     };
 
-    // --- UI refs ---
-    const els = Object.fromEntries([
-      'auth','app','email','password','signin','authMsg','signout','range','refresh','status',
-      'rows','latest','count','signal','lastconn','lastseen','rssiNow','tempALatest','tempBLatest',
-      'fwCurrent','fwManifest','fwUpdateFlag','fwCheckBtn','fwForceBtn','fwMsg','fwCmdWrap','fwCmdText',
-      'events','schema'
-    ].map(id => [id, document.getElementById(id)]));
+    const data = { labels, datasets: ds };
 
-    function log(m){ els.events.textContent = `[${new Date().toLocaleTimeString()}] ${m}\n` + els.events.textContent; }
-
-    // Safely parse raw JSON if present on a row
-    function parseRaw(row){
-      let o=null;
-      try{
-        if (typeof row.raw === 'string') o = JSON.parse(row.raw);
-        else if (row.raw && typeof row.raw === 'object') o = row.raw;
-      }catch(_){}
-      return o;
+    if (!tempsChart){
+      // If time adapter isn't loaded, Chart.js treats dates as values but still draws fine with default formatter.
+      try { tempsChart = new Chart(ctx, { type:'line', data, options:opts }); }
+      catch(_) { tempsChart = new Chart(ctx, { type:'line', data, options:{...opts, scales:{y:opts.scales.y}} }); }
+    } else {
+      tempsChart.data.labels = labels;
+      tempsChart.data.datasets[0].data = A;
+      tempsChart.data.datasets[1].data = B;
+      tempsChart.update('none');
     }
+  }
 
-    // Augment rows with resolved fields from raw
-    function augmentRows(rows){
-      return rows.map(r=>{
-        const o = parseRaw(r) || {};
-        const a = { ...r };
-        // resolved values
-        a.$fw  = r.fw ?? o.fw ?? o.fw_version ?? null;
-        a.$ta  = r.temp_pump_a_c ?? o.temp_pump_a_c ?? r.temp_a ?? o.temp_a ?? r.temp_c ?? o.temp_c ?? null;
-        a.$tb  = r.temp_pump_b_c ?? o.temp_pump_b_c ?? r.temp_b ?? o.temp_b ?? null;
-        a.$uv  = r.uv_status ?? o.uv_status ?? r.status ?? o.status ?? null;
-        a.$rssi= r.rssi ?? o.rssi ?? r.wifi_rssi ?? o.wifi_rssi ?? null;
-        a.$ts  = r.ts ?? r.inserted_at ?? o.ts ?? o.time ?? null;
-        a.$dev = r.device_id ?? r.device ?? o.device_id ?? o.device ?? null;
-        return a;
-      });
-    }
+  // --- manifest compare ---
+  function cmpSemver(a,b){ const pa=String(a).split('.').map(n=>parseInt(n,10)); const pb=String(b).split('.').map(n=>parseInt(n,10)); for(let i=0;i<3;i++){const x=pa[i]||0,y=pb[i]||0;if(x!==y)return x<y?-1:1;} return 0; }
+  async function fetchManifest(){ const url = MANIFEST_URL + '?cb=' + Date.now(); const res = await fetch(url,{cache:'no-store'}); if(!res.ok) throw new Error('manifest fetch '+res.status); return res.json(); }
+  async function refreshFirmwareCompare(){
+    els.fwMsg.textContent='Fetching manifest…'; els.fwCmdWrap.style.display='none';
+    try{
+      const m = await fetchManifest();
+      const mver = m.version || '—';
+      els.fwManifest.textContent = mver;
 
-    // Column/debug line
-    function describeDetection(rows){
-      if (!rows.length){ els.schema.textContent='No rows found.'; return; }
-      const keys = Object.keys(rows[0]).join(', ');
-      const sample = rows[0];
-      els.schema.textContent =
-        `Resolved → ts:${sample.$ts?'✓':'—'}, fw:${sample.$fw?'✓':'—'}, A:${sample.$ta!=null?'✓':'—'}, B:${sample.$tb!=null?'✓':'—'}, rssi:${sample.$rssi!=null?'✓':'—'}, status:${sample.$uv?'✓':'—'}, device:${sample.$dev?'✓':'—'} | Raw keys: ${keys}`;
-    }
-
-    // charts
-    let chartA, chartB;
-    function renderCharts(rows){
-      const ordered = rows.slice().reverse();
-      const labels = ordered.map(r => new Date(r.$ts).toLocaleTimeString());
-      const A = ordered.map(r => r.$ta==null?null:Number(r.$ta));
-      const B = ordered.map(r => r.$tb==null?null:Number(r.$tb));
-
-      const ctxA = document.getElementById('chartA').getContext('2d');
-      const ctxB = document.getElementById('chartB').getContext('2d');
-      const dsA = [{ data:A, spanGaps:true, pointRadius:0, borderWidth:2, label:'Temp A (°C)' }];
-      const dsB = [{ data:B, spanGaps:true, pointRadius:0, borderWidth:2, label:'Temp B (°C)' }];
-      const opts = { animation:false, plugins:{legend:{display:true}}, scales:{ y:{ title:{display:true,text:'°C'} } } };
-
-      if (!chartA) chartA = new Chart(ctxA, { type:'line', data:{ labels, datasets:dsA }, options:opts });
-      else { chartA.data.labels = labels; chartA.data.datasets[0].data = A; chartA.update('none'); }
-
-      if (!chartB) chartB = new Chart(ctxB, { type:'line', data:{ labels, datasets:dsB }, options:opts });
-      else { chartB.data.labels = labels; chartB.data.datasets[0].data = B; chartB.update('none'); }
-    }
-
-    function rssiLabel(dbm){ if (dbm>=-60) return 'Excellent'; if (dbm>=-67) return 'Very good'; if (dbm>=-75) return 'Good'; if (dbm>=-82) return 'Fair'; if (dbm>=-90) return 'Poor'; return 'Very poor'; }
-    function isRecent(tsIso, sec){ if (!tsIso) return false; return (Date.now()-new Date(tsIso).getTime()) <= sec*1000; }
-
-    async function load(){
-      const { data: { session } } = await sb.auth.getSession();
-      if (!session){ log('Not signed in.'); return; }
-
-      const hours = parseInt(els.range.value,10);
-      els.status.textContent = 'Loading…';
-      log(`Load start (range=${hours}h)…`);
-
-      const fromIso = new Date(Date.now() - hours*3600*1000).toISOString();
-      let { data, error } = await sb.from('pump_readings').select('*').gte('ts', fromIso).order('ts', { ascending:false }).limit(500);
-      if (error){ els.status.textContent = 'Error: ' + error.message; return; }
-
-      // augment with values from raw JSON
-      const rows = augmentRows(data);
-      describeDetection(data);
-
-      els.count.textContent = rows.length;
-
-      // latest row UI
-      if (rows.length){
-        const latest = rows[0];
-
-        // status / temps
-        els.latest.textContent = latest.$uv || '—';
-        els.latest.className = 'pill ' + ((latest.$uv==='GREEN') ? 'green' : 'red');
-        els.tempALatest.textContent = (latest.$ta==null)?'—':(+latest.$ta).toFixed(2)+' °C';
-        els.tempBLatest.textContent = (latest.$tb==null)?'—':(+latest.$tb).toFixed(2)+' °C';
-
-        // current FW (from raw if needed)
-        els.fwCurrent.textContent = latest.$fw || '—';
-
-        // device_status (best effort)
-        try{
-          const did = latest.$dev;
-          const { data: ds } = await sb.from('device_status').select('last_seen_ts,last_online_ts,online').eq('device_id', did).single();
-          if (ds){
-            els.lastconn.textContent = ds.last_online_ts ? new Date(ds.last_online_ts).toLocaleString() : (ds.online?'now':'—');
-            els.lastseen.textContent = ds.last_seen_ts ? new Date(ds.last_seen_ts).toLocaleString() : (ds.online?'now':'—');
-            const fresh = rows.filter(r => r.$rssi!=null && isRecent(r.$ts,120)).slice(0,5);
-            if (fresh.length){
-              const avg = fresh.reduce((s,r)=>s+Number(r.$rssi),0)/fresh.length;
-              els.rssiNow.textContent = `${avg.toFixed(0)} dBm (${rssiLabel(avg)})`;
-            } else els.rssiNow.textContent = 'No signal';
-          }
-        }catch(_){}
-      } else {
-        els.latest.textContent = '—'; els.latest.className='pill';
-        els.fwCurrent.textContent = '—';
-        els.rssiNow.textContent = '—';
+      const cur = (els.fwCurrent.textContent||'').trim();
+      if (!cur || cur==='—' || !mver || mver==='—'){
+        els.fwUpdateFlag.textContent='—'; els.fwUpdateFlag.className='pill';
+        els.fwMsg.textContent = cur && cur!=='—' ? 'Manifest loaded.' : 'Manifest loaded; waiting for device FW…';
+        log('Manifest fetched, current FW ' + (cur && cur!=='—' ? cur : 'unknown') + '.');
+        return;
       }
-
-      // table
-      els.rows.innerHTML = '';
-      for (const r of rows){
-        const tr = document.createElement('tr');
-        tr.innerHTML = `
-          <td>${new Date(r.$ts).toISOString()}</td>
-          <td>${r.$dev ?? ''}</td>
-          <td><span class="pill ${(r.$uv==='GREEN')?'green':'red'}">${r.$uv ?? ''}</span></td>
-          <td>${r.$ta==null?'':Number(r.$ta).toFixed(2)}</td>
-          <td>${r.$tb==null?'':Number(r.$tb).toFixed(2)}</td>
-          <td>${r.$rssi ?? ''}</td>
-          <td class="mono">${r.$fw ?? ''}</td>
-        `;
-        els.rows.appendChild(tr);
-      }
-
-      renderCharts(rows);
-
-      // staleness badge
-      if (rows.length){
-        const ageMin = Math.floor((Date.now() - new Date(rows[0].$ts).getTime())/60000);
-        const fresh = ageMin <= 10;
-        els.signal.textContent = fresh ? 'OK' : `STALE: ${ageMin}m`;
-        els.signal.className = 'pill ' + (fresh ? 'green' : 'red');
-      } else {
-        els.signal.textContent = 'NO DATA';
-        els.signal.className = 'pill red';
-      }
-
-      els.status.textContent = 'Last updated: ' + new Date().toLocaleTimeString();
-      log('Load done: rows=' + rows.length);
+      const newer = cmpSemver(cur, mver) < 0;
+      els.fwUpdateFlag.textContent = newer ? 'YES' : 'No';
+      els.fwUpdateFlag.className = 'pill ' + (newer ? 'red' : 'green');
+      els.fwMsg.textContent = newer ? 'New firmware available in manifest.' : 'Device is up to date.';
+      log(`Manifest compare: current=${cur}, manifest=${mver}, update=${newer?'YES':'No'}`);
+    }catch(e){
+      els.fwManifest.textContent='—'; els.fwUpdateFlag.textContent='—'; els.fwUpdateFlag.className='pill';
+      els.fwMsg.textContent='Manifest fetch failed.'; log('Manifest fetch failed: '+e.message);
     }
+  }
 
-    // manifest compare
-    function cmpSemver(a,b){ const pa=String(a).split('.').map(n=>parseInt(n,10)); const pb=String(b).split('.').map(n=>parseInt(n,10)); for(let i=0;i<3;i++){const x=pa[i]||0,y=pb[i]||0;if(x!==y)return x<y?-1:1;} return 0; }
-    async function fetchManifest(){ const url = MANIFEST_URL + '?cb=' + Date.now(); const res = await fetch(url,{cache:'no-store'}); if(!res.ok) throw new Error('manifest fetch '+res.status); return res.json(); }
-    async function refreshFirmwareCompare(){
-      els.fwMsg.textContent='Fetching manifest…'; els.fwCmdWrap.style.display='none';
-      try{
-        const m = await fetchManifest();
-        const mver = m.version || '—';
-        els.fwManifest.textContent = mver;
+  // --- force-check command copy ---
+  function buildForceCheckCommand(){
+    const topic = MQTT.topicCmd(MQTT.devId);
+    return `"C:\\Program Files\\mosquitto\\mosquitto_pub.exe" -h ${MQTT.host} -p ${MQTT.port} -V mqttv311 --cafile "${MQTT.cafile}" -u ${MQTT.user} -P ${MQTT.pass} -t "${topic}" -m "{\\"cmd\\":\\"check_update\\"}"`;
+  }
+  async function copyForceCheck(){
+    const cmd = buildForceCheckCommand();
+    try{ await navigator.clipboard.writeText(cmd); }catch(_){}
+    els.fwCmdText.textContent = cmd;
+    els.fwCmdWrap.style.display = 'block';
+    els.fwMsg.textContent = 'Command copied. Paste into Command Prompt.';
+    log('Force-check command copied.');
+  }
 
-        const cur = (els.fwCurrent.textContent||'').trim();
-        if (!cur || cur==='—' || !mver || mver==='—'){
-          els.fwUpdateFlag.textContent='—'; els.fwUpdateFlag.className='pill';
-          els.fwMsg.textContent = cur && cur!=='—' ? 'Manifest loaded.' : 'Manifest loaded; waiting for device FW…';
-          log('Manifest fetched, current FW ' + (cur && cur!=='—' ? cur : 'unknown') + '.');
-          return;
-        }
-        const newer = cmpSemver(cur, mver) < 0;
-        els.fwUpdateFlag.textContent = newer ? 'YES' : 'No';
-        els.fwUpdateFlag.className = 'pill ' + (newer ? 'red' : 'green');
-        els.fwMsg.textContent = newer ? 'New firmware available in manifest.' : 'Device is up to date.';
-        log(`Manifest compare: current=${cur}, manifest=${mver}, update=${newer?'YES':'No'}`);
-      }catch(e){
-        els.fwManifest.textContent='—'; els.fwUpdateFlag.textContent='—'; els.fwUpdateFlag.className='pill';
-        els.fwMsg.textContent='Manifest fetch failed.'; log('Manifest fetch failed: '+e.message);
-      }
-    }
+  // --- auth & wiring ---
+  async function refreshAuthUI(){
+    const { data: { session } } = await sb.auth.getSession();
+    const authed = !!session;
+    document.getElementById('auth').style.display = authed ? 'none' : 'block';
+    document.getElementById('app').style.display  = authed ? 'block' : 'none';
+    if (authed){ await load(); await refreshFirmwareCompare(); }
+  }
 
-    // force-check command
-    function buildForceCheckCommand(){
-      const topic = MQTT.topicCmd(MQTT.devId);
-      return `"C:\\Program Files\\mosquitto\\mosquitto_pub.exe" -h ${MQTT.host} -p ${MQTT.port} -V mqttv311 --cafile "${MQTT.cafile}" -u ${MQTT.user} -P ${MQTT.pass} -t "${topic}" -m "{\\"cmd\\":\\"check_update\\"}"`;
-    }
-    async function copyForceCheck(){
-      const cmd = buildForceCheckCommand();
-      try{ await navigator.clipboard.writeText(cmd); }catch(_){}
-      els.fwCmdText.textContent = cmd;
-      els.fwCmdWrap.style.display = 'block';
-      els.fwMsg.textContent = 'Command copied. Paste into Command Prompt.';
-      log('Force-check command copied.');
-    }
-
-    // auth + UI
-    async function refreshAuthUI(){
-      const { data: { session } } = await sb.auth.getSession();
-      const authed = !!session;
-      document.getElementById('auth').style.display = authed ? 'none' : 'block';
-      document.getElementById('app').style.display  = authed ? 'block' : 'none';
-      if (authed){ await load(); await refreshFirmwareCompare(); }
-    }
-    document.getElementById('refresh').addEventListener('click', async ()=>{ await load(); await refreshFirmwareCompare(); });
-    document.getElementById('range').addEventListener('change', async ()=>{ await load(); await refreshFirmwareCompare(); });
-    document.getElementById('fwCheckBtn').addEventListener('click', refreshFirmwareCompare);
-    document.getElementById('fwForceBtn').addEventListener('click', copyForceCheck);
-    document.getElementById('signin').addEventListener('click', async ()=>{
-      document.getElementById('authMsg').textContent = '';
-      const { error } = await sb.auth.signInWithPassword({ email: document.getElementById('email').value.trim(), password: document.getElementById('password').value });
-      if (error){ document.getElementById('authMsg').textContent = error.message; return; }
-      await refreshAuthUI();
+  document.getElementById('refresh').addEventListener('click', async ()=>{ await load(); await refreshFirmwareCompare(); });
+  document.getElementById('range').addEventListener('change', async ()=>{ await load(); /* chart + table reflect new window */ });
+  document.getElementById('fwCheckBtn').addEventListener('click', refreshFirmwareCompare);
+  document.getElementById('fwForceBtn').addEventListener('click', copyForceCheck);
+  document.getElementById('signin').addEventListener('click', async ()=>{
+    document.getElementById('authMsg').textContent = '';
+    const { error } = await sb.auth.signInWithPassword({
+      email: document.getElementById('email').value.trim(),
+      password: document.getElementById('password').value
     });
-    document.getElementById('signout').addEventListener('click', async ()=>{ await sb.auth.signOut(); await refreshAuthUI(); });
+    if (error){ document.getElementById('authMsg').textContent = error.message; return; }
+    await refreshAuthUI();
+  });
+  document.getElementById('signout').addEventListener('click', async ()=>{ await sb.auth.signOut(); await refreshAuthUI(); });
 
-    // start + periodic refresh
-    refreshAuthUI();
-    setInterval(async ()=>{ await load(); await refreshFirmwareCompare(); }, 10000);
+  // start + periodic refresh (10s)
+  refreshAuthUI();
+  setInterval(async ()=>{ const { data:{session} } = await sb.auth.getSession(); if (session) { await load(); await refreshFirmwareCompare(); } }, 10000);
   </script>
 </body>
 </html>
