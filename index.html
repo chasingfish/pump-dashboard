@@ -38,14 +38,14 @@
   </div>
 
   <div id="app" style="display:none;">
-    <h1>Pump Readings</h1>
+    <h1>Pump Readings2</h1>
 
     <div class="row">
       <label for="range">Time range:</label>
       <select id="range">
         <option value="24h" selected>Last 24 hours</option>
         <option value="3d">Last 3 days</option>
-        <option value="7d">Last 7 days</option>
+        <option value="7d">Last 1 week</option>
         <option value="30d">Last 30 days</option>
         <option value="90d">Last 90 days</option>
       </select>
@@ -61,8 +61,10 @@
       <div class="kv">
         <div class="muted">Current device FW</div>
         <div><span id="fwCurrent" class="mono">—</span></div>
+
         <div class="muted">Manifest FW</div>
         <div><span id="fwManifest" class="mono">—</span></div>
+
         <div class="muted">Update available</div>
         <div><span id="fwUpdateFlag" class="pill">—</span></div>
       </div>
@@ -115,6 +117,9 @@
 
   <script src="https://unpkg.com/@supabase/supabase-js@2"></script>
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <!-- Time-scale adapter so the X axis respects real time windows -->
+  <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns"></script>
+
   <script>
   // --- CONFIG ---
   const SUPABASE_URL = "https://ojomcciunusemwszdnrl.supabase.co";
@@ -160,7 +165,7 @@
       a.$tb  = r.temp_pump_b_c ?? o.temp_pump_b_c ?? r.temp_b ?? o.temp_b ?? null;
       a.$uv  = r.uv_status ?? o.uv_status ?? r.status ?? o.status ?? null;
       a.$rssi= r.rssi ?? o.rssi ?? r.wifi_rssi ?? o.wifi_rssi ?? null;
-      a.$ts  = r.ts ?? r.inserted_at ?? o.ts ?? o.time ?? null;
+      a.$ts  = r.ts ?? r.inserted_at ?? o.ts ?? o.time ?? null; // ISO8601 expected
       a.$dev = r.device_id ?? r.device ?? o.device_id ?? o.device ?? null;
       return a;
     });
@@ -179,146 +184,155 @@
 
   function hoursFromRangeValue(v){
     if (v.endsWith('h')) return parseInt(v,10);
-    if (v.endsWith('d')) return parseInt(v,10)*24;
-    return 24;
+    const d = parseInt(v,10);
+    return d * 24; // '3d','7d','30d','90d'
+  }
+
+  function chooseTimeUnit(hours){
+    if (hours <= 36) return 'hour';
+    if (hours <= 24*14) return 'day';
+    if (hours <= 24*90) return 'week';
+    return 'month';
+  }
+
+  function computeWindow(){
+    const hours = hoursFromRangeValue(els.range.value);
+    const toMs = Date.now();
+    const fromMs = toMs - hours * 3600 * 1000;
+    return { fromMs, toMs, hours };
   }
 
   // --- data load ---
-  let tempsChart = null;
+  let tempsChart=null;
 
-  // Fetch ALL rows for chart, limited by time range, up to 5000 (or more if needed)
-  async function fetchRowsForChart(fromIso, toIso) {
-    try {
+  // Robust fetch between [from,to] with fallbacks
+  async function fetchRowsBetween(fromIso, toIso, orderAsc, limit){
+    // Primary: range on ts
+    try{
       const { data, error } = await sb.from('pump_readings')
         .select('*')
-        .gte('ts', fromIso)
-        .lte('ts', toIso)
-        .order('ts', { ascending: true })
-        .limit(5000); // Increase if needed
-      if (!error && data) return { data, via: 'ts' };
-      if (error) log('Chart query error: ' + error.message);
-    } catch (e) { log('Chart query threw: ' + e.message); }
-    return { data: [], via: 'none' };
-  }
+        .gte('ts', fromIso).lte('ts', toIso)
+        .order('ts', { ascending: orderAsc })
+        .limit(limit);
+      if (!error && data && data.length) return { data, via:'ts' };
+      if (error) log('Query (ts) error: ' + error.message);
+    }catch(e){ log('Query (ts) threw: ' + e.message); }
 
-  // Fetch rows for table (limit to 100 for display)
-  async function fetchRowsForTable(fromIso, toIso) {
-    try {
+    // Fallback: range on inserted_at
+    try{
       const { data, error } = await sb.from('pump_readings')
         .select('*')
-        .gte('ts', fromIso)
-        .lte('ts', toIso)
-        .order('ts', { ascending: false })
-        .limit(100);
-      if (!error && data) return { data, via: 'ts' };
-      if (error) log('Table query error: ' + error.message);
-    } catch (e) { log('Table query threw: ' + e.message); }
-    return { data: [], via: 'none' };
+        .gte('inserted_at', fromIso).lte('inserted_at', toIso)
+        .order('inserted_at', { ascending: orderAsc })
+        .limit(limit);
+      if (!error && data && data.length) return { data, via:'inserted_at' };
+      if (error) log('Query (inserted_at) error: ' + error.message);
+    }catch(e){ log('Query (inserted_at) threw: ' + e.message); }
+
+    // Last resort: recent rows (no filter)
+    try{
+      const { data, error } = await sb.from('pump_readings')
+        .select('*')
+        .order('ts', { ascending: orderAsc })
+        .limit(Math.min(limit, 500));
+      if (!error && data) return { data, via:'no filter' };
+      if (error) log('Last-resort query error: ' + error.message);
+    }catch(e){ log('Last-resort query threw: ' + e.message); }
+
+    return { data: [], via:'none' };
   }
 
-  // Chart window: show ALL points, no slotting
-  function getChartWindowAll(rows) {
-    if (!rows.length) return { labels: [], A: [], B: [] };
-    // Already sorted ascending by time
-    return {
-      labels: rows.map(r => new Date(r.$ts).toLocaleString()),
-      A: rows.map(r => r.$ta == null ? null : Number(r.$ta)),
-      B: rows.map(r => r.$tb == null ? null : Number(r.$tb))
-    };
-  }
-
-  async function load() {
+  async function load(){
     const { data: { session } } = await sb.auth.getSession();
-    if (!session) {
+    if (!session){
       log('Not signed in.');
       els.status.textContent = 'Not signed in.';
       return;
     }
 
-    const hours = hoursFromRangeValue(els.range.value);
-    const now = new Date();
-    const from = new Date(now.getTime() - hours * 3600 * 1000);
-    const fromIso = from.toISOString();
-    const toIso = now.toISOString();
+    const { fromMs, toMs, hours } = computeWindow();
+    const fromIso = new Date(fromMs).toISOString();
+    const toIso   = new Date(toMs).toISOString();
+    const unit    = chooseTimeUnit(hours);
 
     els.status.textContent = `Loading… (${els.range.options[els.range.selectedIndex].text})`;
-    log(`Load start (from ${fromIso} to ${toIso})`);
+    log(`Load start: ${fromIso} → ${toIso}`);
 
-    // Table rows (limit 100)
-    const { data: rawTable, via: viaTable } = await fetchRowsForTable(fromIso, toIso);
+    // Table rows (desc, small cap)
+    const { data: rawTable, via: viaTable } =
+      await fetchRowsBetween(fromIso, toIso, /*asc*/false, /*limit*/150);
     const rowsTable = augmentRows(rawTable)
       .filter(r => r.$ts)
-      .sort((a, b) => new Date(b.$ts).getTime() - new Date(a.$ts).getTime());
+      .sort((a,b)=> new Date(b.$ts) - new Date(a.$ts));
 
-    // Chart rows (limit 5000)
-    const { data: rawChart, via: viaChart } = await fetchRowsForChart(fromIso, toIso);
-    const rowsChart = augmentRows(rawChart)
-      .filter(r => r.$ts);
+    // Chart rows (asc, larger cap)
+    const { data: rawChart, via: viaChart } =
+      await fetchRowsBetween(fromIso, toIso, /*asc*/true, /*limit*/10000);
+    const rowsChart = augmentRows(rawChart).filter(r => r.$ts);
 
     describeDetection(rawTable);
     els.count.textContent = rowsTable.length;
 
     // latest badges (from table)
-    if (rowsTable.length) {
+    if (rowsTable.length){
       const latest = rowsTable[0];
       els.latest.textContent = latest.$uv || '—';
-      els.latest.className = 'pill ' + ((latest.$uv === 'GREEN') ? 'green' : 'red');
-      els.tempALatest.textContent = (latest.$ta == null) ? '—' : (+latest.$ta).toFixed(2) + ' °C';
-      els.tempBLatest.textContent = (latest.$tb == null) ? '—' : (+latest.$tb).toFixed(2) + ' °C';
+      els.latest.className = 'pill ' + ((latest.$uv==='GREEN') ? 'green' : 'red');
+      els.tempALatest.textContent = (latest.$ta==null)?'—':(+latest.$ta).toFixed(2)+' °C';
+      els.tempBLatest.textContent = (latest.$tb==null)?'—':(+latest.$tb).toFixed(2)+' °C';
       els.fwCurrent.textContent = latest.$fw || '—';
 
-      // device_status summary (best effort)
-      try {
+      try{
         const did = latest.$dev;
-        const { data: ds } = await sb.from('device_status').select('last_seen_ts,last_online_ts,online').eq('device_id', did).single();
-        if (ds) {
-          els.lastconn.textContent = ds.last_online_ts ? new Date(ds.last_online_ts).toLocaleString() : (ds.online ? 'now' : '—');
-          els.lastseen.textContent = ds.last_seen_ts ? new Date(ds.last_seen_ts).toLocaleString() : (ds.online ? 'now' : '—');
-          const fresh = rowsTable.filter(r => r.$rssi != null && isRecent(r.$ts, 120)).slice(0, 5);
-          if (fresh.length) {
-            const avg = fresh.reduce((s, r) => s + Number(r.$rssi), 0) / fresh.length;
+        const { data: ds } = await sb.from('device_status')
+          .select('last_seen_ts,last_online_ts,online').eq('device_id', did).single();
+        if (ds){
+          els.lastconn.textContent = ds.last_online_ts ? new Date(ds.last_online_ts).toLocaleString() : (ds.online?'now':'—');
+          els.lastseen.textContent = ds.last_seen_ts ? new Date(ds.last_seen_ts).toLocaleString() : (ds.online?'now':'—');
+          const fresh = rowsTable.filter(r => r.$rssi!=null && isRecent(r.$ts,120)).slice(0,5);
+          if (fresh.length){
+            const avg = fresh.reduce((s,r)=>s+Number(r.$rssi),0)/fresh.length;
             els.rssiNow.textContent = `${avg.toFixed(0)} dBm (${rssiLabel(avg)})`;
           } else els.rssiNow.textContent = 'No signal';
         }
-      } catch (e) { log('device_status lookup failed: ' + e.message); }
+      }catch(e){ log('device_status lookup failed: ' + e.message); }
     } else {
-      els.latest.textContent = '—'; els.latest.className = 'pill';
+      els.latest.textContent = '—'; els.latest.className='pill';
       els.fwCurrent.textContent = '—'; els.rssiNow.textContent = '—';
     }
 
     // table (descending time)
     els.rows.innerHTML = '';
-    if (rowsTable.length) {
-      for (const r of rowsTable) {
+    if (rowsTable.length){
+      for (const r of rowsTable){
         const tr = document.createElement('tr');
         tr.innerHTML = `
           <td>${new Date(r.$ts).toISOString()}</td>
           <td>${r.$dev ?? ''}</td>
-          <td><span class="pill ${(r.$uv === 'GREEN') ? 'green' : 'red'}">${r.$uv ?? ''}</span></td>
-          <td>${r.$ta == null ? '' : Number(r.$ta).toFixed(2)}</td>
-          <td>${r.$tb == null ? '' : Number(r.$tb).toFixed(2)}</td>
+          <td><span class="pill ${(r.$uv==='GREEN')?'green':'red'}">${r.$uv ?? ''}</span></td>
+          <td>${r.$ta==null?'':Number(r.$ta).toFixed(2)}</td>
+          <td>${r.$tb==null?'':Number(r.$tb).toFixed(2)}</td>
           <td>${r.$rssi ?? ''}</td>
           <td class="mono">${r.$fw ?? ''}</td>
         `;
         els.rows.appendChild(tr);
       }
     } else {
-      // Show empty row if no data
       const tr = document.createElement('tr');
       tr.innerHTML = `<td colspan="7" style="text-align:center;color:#999;">No data for selected range.</td>`;
       els.rows.appendChild(tr);
     }
 
-    // chart (show ALL points)
+    // chart
     try {
-      renderTempsChartWindowAll(rowsChart);
-    } catch (e) {
+      renderTempsChart(rowsChart, fromMs, toMs, unit);
+    } catch(e) {
       log('Chart render failed: ' + e.message);
     }
 
     // staleness badge (from table)
-    if (rowsTable.length) {
-      const ageMin = Math.floor((Date.now() - new Date(rowsTable[0].$ts).getTime()) / 60000);
+    if (rowsTable.length){
+      const ageMin = Math.floor((Date.now() - new Date(rowsTable[0].$ts).getTime())/60000);
       const fresh = ageMin <= 10;
       els.signal.textContent = fresh ? 'OK' : `STALE: ${ageMin}m`;
       els.signal.className = 'pill ' + (fresh ? 'green' : 'red');
@@ -327,38 +341,54 @@
       els.signal.className = 'pill red';
     }
 
-    els.status.textContent = `Last updated: ${new Date().toLocaleTimeString()} • ${els.range.options[els.range.selectedIndex].text} • table via: ${viaTable}, chart via: ${viaChart}`;
-    log('Load done: table rows=' + rowsTable.length + ', chart rows=' + rowsChart.length);
+    els.status.textContent =
+      `Last updated: ${new Date().toLocaleTimeString()} • ${els.range.options[els.range.selectedIndex].text} • table via: ${viaTable}, chart via: ${viaChart}`;
+    log(`Load done: table=${rowsTable.length}, chart=${rowsChart.length}, unit=${unit}`);
   }
 
-  // --- chart (Temp A & B together; ALL points, no slotting) ---
-  function renderTempsChartWindowAll(rows) {
-    const { labels, A, B } = getChartWindowAll(rows);
+  // --- chart (time scale with explicit window) ---
+  function renderTempsChart(ordered, fromMs, toMs, unit){
+    // Build {x:ms, y:value} and keep gaps as null (spanGaps)
+    const A = ordered
+      .map(r => (r.$ta==null ? null : { x: new Date(r.$ts).getTime(), y: Number(r.$ta) }))
+      .filter(p => p===null || (p.x>=fromMs && p.x<=toMs));
+    const B = ordered
+      .map(r => (r.$tb==null ? null : { x: new Date(r.$ts).getTime(), y: Number(r.$tb) }))
+      .filter(p => p===null || (p.x>=fromMs && p.x<=toMs));
 
     const ctx = document.getElementById('chartTemps').getContext('2d');
 
     const ds = [
-      { data: A, label: 'Temp A (°C)', spanGaps: true, pointRadius: 0, borderWidth: 2 },
-      { data: B, label: 'Temp B (°C)', spanGaps: true, pointRadius: 0, borderWidth: 2 }
+      { data:A.filter(p=>p!==null), label:'Temp A (°C)', spanGaps:true, pointRadius:0, borderWidth:2, parsing:false },
+      { data:B.filter(p=>p!==null), label:'Temp B (°C)', spanGaps:true, pointRadius:0, borderWidth:2, parsing:false }
     ];
 
     const opts = {
-      animation: false,
-      plugins: { legend: { display: true, position: 'top' } },
-      scales: {
-        x: { type: 'category', ticks: { autoSkip: true, maxRotation: 0 } },
-        y: { title: { display: true, text: '°C' }, beginAtZero: false }
+      parsing:false,
+      animation:false,
+      plugins:{ legend:{ display:true, position:'top' } },
+      scales:{
+        x:{
+          type:'time',
+          time:{ unit },
+          min: fromMs,
+          max: toMs,
+          ticks:{ maxRotation:0 }
+        },
+        y:{ title:{ display:true, text:'°C' }, beginAtZero:false }
       }
     };
 
-    const data = { labels, datasets: ds };
+    const data = { datasets: ds };
 
-    if (!tempsChart) {
-      tempsChart = new Chart(ctx, { type: 'line', data, options: opts });
+    if (!tempsChart){
+      tempsChart = new Chart(ctx, { type:'line', data, options:opts });
     } else {
-      tempsChart.data.labels = labels;
-      tempsChart.data.datasets[0].data = A;
-      tempsChart.data.datasets[1].data = B;
+      tempsChart.options.scales.x.min = fromMs;
+      tempsChart.options.scales.x.max = toMs;
+      tempsChart.options.scales.x.time.unit = unit;
+      tempsChart.data.datasets[0].data = ds[0].data;
+      tempsChart.data.datasets[1].data = ds[1].data;
       tempsChart.update('none');
     }
   }
@@ -415,7 +445,7 @@
   }
 
   document.getElementById('refresh').addEventListener('click', async ()=>{ await load(); await refreshFirmwareCompare(); });
-  document.getElementById('range').addEventListener('change', async ()=>{ await load(); });
+  document.getElementById('range').addEventListener('change', async ()=>{ await load(); /* table + chart reflect new window */ });
   document.getElementById('fwCheckBtn').addEventListener('click', refreshFirmwareCompare);
   document.getElementById('fwForceBtn').addEventListener('click', copyForceCheck);
   document.getElementById('signin').addEventListener('click', async ()=>{
