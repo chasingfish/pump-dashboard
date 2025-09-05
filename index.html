@@ -38,7 +38,7 @@
   </div>
 
   <div id="app" style="display:none;">
-    <h1>Pump Readingsz</h1>
+    <h1>Pump Readings94</h1>
 
     <div class="row">
       <label for="range">Time range:</label>
@@ -91,7 +91,7 @@
       <div>Latest Temp B: <span id="tempBLatest">—</span></div>
     </div>
 
-    <!-- Combined chart -->
+    <!-- Chart -->
     <canvas id="chartTemps" height="180"></canvas>
 
     <table style="margin-top:16px;">
@@ -193,7 +193,7 @@
 
   function computeWindow(){
     const hours = hoursFromRangeValue(els.range.value);
-    const toMs = Date.now(); // now
+    const toMs = Date.now(); // now (client)
     const fromMs = toMs - hours * 3600 * 1000;
     return { fromMs, toMs, hours };
   }
@@ -207,55 +207,46 @@
     return Array.from(map.values());
   }
 
-  // -------- Paged fetch across the full window (no truncation) --------
-  async function fetchWindowPaged({ fromIso, toIso, pageSize=5000, hardCap=200000 }){
-    let all = []; let lastTs = null; let via = 'ts'; let tries = 0;
-
-    async function pageWithTs(afterTs){
-      let q = sb.from('pump_readings').select('*')
-        .gte('ts', fromIso).lte('ts', toIso)
-        .order('ts', { ascending: true })
+  // ---------- FULL-WINDOW PAGED FETCH ON BOTH FIELDS (ts & inserted_at) ----------
+  async function pageByField(field, fromIso, toIso, pageSize=1000, hardCap=300000){
+    let all = [];
+    let lastVal = null;
+    while (all.length < hardCap){
+      let q = sb.from('pump_readings')
+        .select('*')
+        .gte(field, fromIso).lte(field, toIso)
+        .order(field, { ascending: true })
         .limit(pageSize);
-      if (afterTs) q = q.gt('ts', afterTs);
+      if (lastVal) q = q.gt(field, lastVal);
       const { data, error } = await q;
-      if (error) throw new Error(error.message);
-      return data || [];
+      if (error) throw new Error(`${field} page error: ${error.message}`);
+      const batch = data || [];
+      if (!batch.length) break;
+      all.push(...batch);
+      const last = batch[batch.length - 1][field];
+      if (!last || last === lastVal) break; // safety
+      lastVal = last;
+      if (batch.length < pageSize) break;
     }
+    return all;
+  }
 
-    async function pageWithInserted(afterTs){
-      let q = sb.from('pump_readings').select('*')
-        .gte('inserted_at', fromIso).lte('inserted_at', toIso)
-        .order('inserted_at', { ascending: true })
-        .limit(pageSize);
-      if (afterTs) q = q.gt('inserted_at', afterTs);
-      const { data, error } = await q;
-      if (error) throw new Error(error.message);
-      return data || [];
-    }
-
-    // First try paging on ts
-    try{
-      while (all.length < hardCap){
-        const batch = await pageWithTs(lastTs);
-        if (!batch.length) break;
-        all.push(...batch);
-        lastTs = batch[batch.length - 1].ts || batch[batch.length - 1].inserted_at || null;
-        tries++; if (batch.length < pageSize) break;
-      }
-    }catch(e){
-      // Fallback: page on inserted_at
-      via = 'inserted_at';
-      all = []; lastTs = null;
-      while (all.length < hardCap){
-        const batch = await pageWithInserted(lastTs);
-        if (!batch.length) break;
-        all.push(...batch);
-        lastTs = batch[batch.length - 1].inserted_at || batch[batch.length - 1].ts || null;
-        tries++; if (batch.length < pageSize) break;
-      }
-    }
-
-    return { data: all, via, pages: tries };
+  async function fetchWindowBoth(fromIso, toIso){
+    // Run both in sequence (could be parallel) and merge.
+    let a = [], b = [], via = [];
+    try { a = await pageByField('ts', fromIso, toIso); via.push('ts'); } catch(e){ log(e.message); }
+    try { b = await pageByField('inserted_at', fromIso, toIso); via.push('inserted_at'); } catch(e){ log(e.message); }
+    const merged = dedupeByTsDev(augmentRows(a).concat(augmentRows(b))).filter(r=>r.$ts);
+    // Keep only exact window with our unified timestamp
+    const fromMs = new Date(fromIso).getTime();
+    const toMs   = new Date(toIso).getTime();
+    const inWin  = merged.filter(r => {
+      const t = new Date(r.$ts).getTime();
+      return Number.isFinite(t) && t >= fromMs && t <= toMs;
+    });
+    // Ascending time for chart
+    inWin.sort((x,y)=> new Date(x.$ts) - new Date(y.$ts));
+    return { rows: inWin, via: via.join('+') || 'none' };
   }
 
   // --- data load ---
@@ -277,21 +268,17 @@
     els.status.textContent = `Loading… (${els.range.options[els.range.selectedIndex].text})`;
     log(`Load start: ${fromIso} → ${toIso}`);
 
-    // Page size & cap tuned for your ranges
-    const pageSize = 5000;
-    const hardCap  = hours <= 48 ? 100000 : 200000;
+    // Fetch full window from BOTH fields to ensure completeness
+    const { rows: rowsAll, via } = await fetchWindowBoth(fromIso, toIso);
 
-    // Fetch the *entire* window ascending (no truncation)
-    const { data: rawWin, via } = await fetchWindowPaged({ fromIso, toIso, pageSize, hardCap });
-    const rowsAll = augmentRows(rawWin).filter(r => r.$ts);
+    // Table: latest 200, newest-first
+    const rowsTable = rowsAll.slice(-200).reverse();
 
-    // For table: newest-first small slice
-    const rowsTable = rowsAll.slice(-200).reverse(); // last 200
-
-    describeDetection(rawWin);
+    // Schema/debug
+    describeDetection(rowsAll.length ? [rowsAll[0]] : []);
     els.count.textContent = rowsTable.length;
 
-    // latest badges
+    // Latest badges
     if (rowsTable.length){
       const latest = rowsTable[0];
       els.latest.textContent = latest.$uv || '—';
@@ -319,7 +306,7 @@
       els.fwCurrent.textContent = '—'; els.rssiNow.textContent = '—';
     }
 
-    // table render
+    // Table render
     els.rows.innerHTML = '';
     if (rowsTable.length){
       for (const r of rowsTable){
@@ -341,14 +328,14 @@
       els.rows.appendChild(tr);
     }
 
-    // chart (time axis with explicit [min,max] to "now")
+    // Chart: time scale with explicit window up to NOW
     try {
       renderTempsChart(rowsAll, fromMs, toMs, unit);
     } catch(e) {
       log('Chart render failed: ' + e.message);
     }
 
-    // staleness badge
+    // Staleness
     if (rowsTable.length){
       const ageMin = Math.floor((Date.now() - new Date(rowsTable[0].$ts).getTime())/60000);
       const fresh = ageMin <= 10;
@@ -360,20 +347,21 @@
     }
 
     els.status.textContent = `Last updated: ${new Date().toLocaleTimeString()} • via: ${via}`;
-    log(`Load done: rows=${rowsAll.length} (pages across ${via})`);
+    log(`Load done: rows=${rowsAll.length}, unit=${unit}`);
   }
 
-  // --- chart (time scale with explicit window) ---
+  // --- chart (time scale with explicit [min,max]) ---
+  let tempsChart=null;
   function renderTempsChart(allAsc, fromMs, toMs, unit){
     const A = allAsc
       .filter(r => r.$ta!=null)
       .map(r => ({ x: new Date(r.$ts).getTime(), y: Number(r.$ta) }))
-      .filter(p => p.x>=fromMs && p.x<=toMs);
+      .filter(p => Number.isFinite(p.x) && p.x>=fromMs && p.x<=toMs);
 
     const B = allAsc
       .filter(r => r.$tb!=null)
       .map(r => ({ x: new Date(r.$ts).getTime(), y: Number(r.$tb) }))
-      .filter(p => p.x>=fromMs && p.x<=toMs);
+      .filter(p => Number.isFinite(p.x) && p.x>=fromMs && p.x<=toMs);
 
     const ctx = document.getElementById('chartTemps').getContext('2d');
 
@@ -412,7 +400,7 @@
     }
   }
 
-  // --- manifest compare ---
+  // --- firmware/commands (unchanged) ---
   function cmpSemver(a,b){ const pa=String(a).split('.').map(n=>parseInt(n,10)); const pb=String(b).split('.').map(n=>parseInt(n,10)); for(let i=0;i<3;i++){const x=pa[i]||0,y=pb[i]||0;if(x!==y)return x<y?-1:1;} return 0; }
   async function fetchManifest(){ const url = MANIFEST_URL + '?cb=' + Date.now(); const res = await fetch(url,{cache:'no-store'}); if(!res.ok) throw new Error('manifest fetch '+res.status); return res.json(); }
   async function refreshFirmwareCompare(){
@@ -440,7 +428,6 @@
     }
   }
 
-  // --- force-check command copy ---
   function buildForceCheckCommand(){
     const topic = MQTT.topicCmd(MQTT.devId);
     return `"C:\\Program Files\\mosquitto\\mosquitto_pub.exe" -h ${MQTT.host} -p ${MQTT.port} -V mqttv311 --cafile "${MQTT.cafile}" -u ${MQTT.user} -P ${MQTT.pass} -t "${topic}" -m "{\\"cmd\\":\\"check_update\\"}"`;
@@ -464,7 +451,7 @@
   }
 
   document.getElementById('refresh').addEventListener('click', async ()=>{ await load(); await refreshFirmwareCompare(); });
-  document.getElementById('range').addEventListener('change', async ()=>{ await load(); /* table + chart reflect new window */ });
+  document.getElementById('range').addEventListener('change', async ()=>{ await load(); });
   document.getElementById('fwCheckBtn').addEventListener('click', refreshFirmwareCompare);
   document.getElementById('fwForceBtn').addEventListener('click', copyForceCheck);
   document.getElementById('signin').addEventListener('click', async ()=>{
