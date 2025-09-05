@@ -185,149 +185,115 @@
   }
 
   // --- data load ---
-  let tempsChart=null;
+  let tempsChart = null;
 
-  async function fetchRows(fromIso){
-    // Try ts first
-    try{
+  // Fetch ALL rows for chart, limited by time range, up to 5000 (or more if needed)
+  async function fetchRowsForChart(fromIso) {
+    try {
       const { data, error } = await sb.from('pump_readings')
         .select('*')
         .gte('ts', fromIso)
-        .order('ts', { ascending:false })
-        .limit(5000);
-      if (!error && data && data.length) return { data, via:'ts' };
-      if (error) log('Primary query (ts) error: ' + error.message);
-    }catch(e){ log('Primary query (ts) threw: ' + e.message); }
-
-    // Fallback inserted_at
-    try{
-      const { data, error } = await sb.from('pump_readings')
-        .select('*')
-        .gte('inserted_at', fromIso)
-        .order('inserted_at', { ascending:false })
-        .limit(5000);
-      if (!error && data && data.length) return { data, via:'inserted_at' };
-      if (error) log('Fallback query (inserted_at) error: ' + error.message);
-    }catch(e){ log('Fallback query (inserted_at) threw: ' + e.message); }
-
-    // Last resort: recent rows (no time filter)
-    try{
-      const { data, error } = await sb.from('pump_readings')
-        .select('*')
-        .order('ts', { ascending:false })
-        .limit(500);
-      if (!error && data) return { data, via:'no filter' };
-      if (error) log('Last-resort query error: ' + error.message);
-    }catch(e){ log('Last-resort query threw: ' + e.message); }
-
-    return { data: [], via:'none' };
+        .order('ts', { ascending: false })
+        .limit(5000); // Increase if needed
+      if (!error && data) return { data, via: 'ts' };
+      if (error) log('Chart query error: ' + error.message);
+    } catch (e) { log('Chart query threw: ' + e.message); }
+    return { data: [], via: 'none' };
   }
 
-  // --- chart window logic ---
-  function getChartWindow(rows, hours) {
-    // Chart window: fill X axis with empty slots if data is missing
+  // Fetch rows for table (limit to 100 for display)
+  async function fetchRowsForTable(fromIso) {
+    try {
+      const { data, error } = await sb.from('pump_readings')
+        .select('*')
+        .gte('ts', fromIso)
+        .order('ts', { ascending: false })
+        .limit(100);
+      if (!error && data) return { data, via: 'ts' };
+      if (error) log('Table query error: ' + error.message);
+    } catch (e) { log('Table query threw: ' + e.message); }
+    return { data: [], via: 'none' };
+  }
+
+  // Chart window: show ALL points, no slotting
+  function getChartWindowAll(rows) {
     if (!rows.length) return { labels: [], A: [], B: [] };
-
-    // Find min/max time in rows
-    const end = new Date(); // now
-    const start = new Date(end.getTime() - hours*3600*1000);
-
-    // Build time slots: 1 slot per hour for <=24h, else 1 slot per 6h for >24h
-    let slotMinutes = hours <= 24 ? 60 : 360;
-    let slots = [];
-    let slotLabels = [];
-    let slotA = [];
-    let slotB = [];
-
-    for (let t = start.getTime(); t <= end.getTime(); t += slotMinutes*60*1000) {
-      slots.push(new Date(t));
-    }
-
-    // For each slot, find the latest row in that slot
-    for (let i = 0; i < slots.length; i++) {
-      let slotStart = slots[i];
-      let slotEnd = (i+1 < slots.length) ? slots[i+1] : end;
-      // Find rows in this slot
-      let inSlot = rows.filter(r => {
-        let ts = new Date(r.$ts);
-        return ts >= slotStart && ts < slotEnd;
-      });
-      // Use the latest row in slot, or null
-      if (inSlot.length) {
-        let latest = inSlot.reduce((a,b)=>new Date(a.$ts)>new Date(b.$ts)?a:b);
-        slotLabels.push(slotStart.toLocaleString());
-        slotA.push(latest.$ta==null?null:Number(latest.$ta));
-        slotB.push(latest.$tb==null?null:Number(latest.$tb));
-      } else {
-        slotLabels.push(slotStart.toLocaleString());
-        slotA.push(null);
-        slotB.push(null);
-      }
-    }
-    return { labels: slotLabels, A: slotA, B: slotB };
+    // Sort ascending by time
+    rows = rows.slice().sort((a, b) => new Date(a.$ts) - new Date(b.$ts));
+    return {
+      labels: rows.map(r => new Date(r.$ts).toLocaleString()),
+      A: rows.map(r => r.$ta == null ? null : Number(r.$ta)),
+      B: rows.map(r => r.$tb == null ? null : Number(r.$tb))
+    };
   }
 
-  async function load(){
+  async function load() {
     const { data: { session } } = await sb.auth.getSession();
-    if (!session){
+    if (!session) {
       log('Not signed in.');
       els.status.textContent = 'Not signed in.';
       return;
     }
 
     const hours = hoursFromRangeValue(els.range.value);
-    const fromIso = new Date(Date.now() - hours*3600*1000).toISOString();
+    const fromIso = new Date(Date.now() - hours * 3600 * 1000).toISOString();
 
     els.status.textContent = `Loading… (${els.range.options[els.range.selectedIndex].text})`;
     log(`Load start (from ${fromIso})`);
 
-    const { data: raw, via } = await fetchRows(fromIso);
-    const rows = augmentRows(raw)
-      .filter(r => r.$ts) // need a timestamp
-      .sort((a,b)=> new Date(b.$ts).getTime() - new Date(a.$ts).getTime());
+    // Table rows (limit 100)
+    const { data: rawTable, via: viaTable } = await fetchRowsForTable(fromIso);
+    const rowsTable = augmentRows(rawTable)
+      .filter(r => r.$ts)
+      .sort((a, b) => new Date(b.$ts).getTime() - new Date(a.$ts).getTime());
 
-    describeDetection(raw);
-    els.count.textContent = rows.length;
+    // Chart rows (limit 5000)
+    const { data: rawChart, via: viaChart } = await fetchRowsForChart(fromIso);
+    const rowsChart = augmentRows(rawChart)
+      .filter(r => r.$ts);
 
-    // latest badges
-    if (rows.length){
-      const latest = rows[0];
+    describeDetection(rawTable);
+    els.count.textContent = rowsTable.length;
+
+    // latest badges (from table)
+    if (rowsTable.length) {
+      const latest = rowsTable[0];
       els.latest.textContent = latest.$uv || '—';
-      els.latest.className = 'pill ' + ((latest.$uv==='GREEN') ? 'green' : 'red');
-      els.tempALatest.textContent = (latest.$ta==null)?'—':(+latest.$ta).toFixed(2)+' °C';
-      els.tempBLatest.textContent = (latest.$tb==null)?'—':(+latest.$tb).toFixed(2)+' °C';
+      els.latest.className = 'pill ' + ((latest.$uv === 'GREEN') ? 'green' : 'red');
+      els.tempALatest.textContent = (latest.$ta == null) ? '—' : (+latest.$ta).toFixed(2) + ' °C';
+      els.tempBLatest.textContent = (latest.$tb == null) ? '—' : (+latest.$tb).toFixed(2) + ' °C';
       els.fwCurrent.textContent = latest.$fw || '—';
 
       // device_status summary (best effort)
-      try{
+      try {
         const did = latest.$dev;
         const { data: ds } = await sb.from('device_status').select('last_seen_ts,last_online_ts,online').eq('device_id', did).single();
-        if (ds){
-          els.lastconn.textContent = ds.last_online_ts ? new Date(ds.last_online_ts).toLocaleString() : (ds.online?'now':'—');
-          els.lastseen.textContent = ds.last_seen_ts ? new Date(ds.last_seen_ts).toLocaleString() : (ds.online?'now':'—');
-          const fresh = rows.filter(r => r.$rssi!=null && isRecent(r.$ts,120)).slice(0,5);
-          if (fresh.length){
-            const avg = fresh.reduce((s,r)=>s+Number(r.$rssi),0)/fresh.length;
+        if (ds) {
+          els.lastconn.textContent = ds.last_online_ts ? new Date(ds.last_online_ts).toLocaleString() : (ds.online ? 'now' : '—');
+          els.lastseen.textContent = ds.last_seen_ts ? new Date(ds.last_seen_ts).toLocaleString() : (ds.online ? 'now' : '—');
+          const fresh = rowsTable.filter(r => r.$rssi != null && isRecent(r.$ts, 120)).slice(0, 5);
+          if (fresh.length) {
+            const avg = fresh.reduce((s, r) => s + Number(r.$rssi), 0) / fresh.length;
             els.rssiNow.textContent = `${avg.toFixed(0)} dBm (${rssiLabel(avg)})`;
           } else els.rssiNow.textContent = 'No signal';
         }
-      }catch(e){ log('device_status lookup failed: ' + e.message); }
+      } catch (e) { log('device_status lookup failed: ' + e.message); }
     } else {
-      els.latest.textContent = '—'; els.latest.className='pill';
+      els.latest.textContent = '—'; els.latest.className = 'pill';
       els.fwCurrent.textContent = '—'; els.rssiNow.textContent = '—';
     }
 
     // table (descending time)
     els.rows.innerHTML = '';
-    if (rows.length) {
-      for (const r of rows){
+    if (rowsTable.length) {
+      for (const r of rowsTable) {
         const tr = document.createElement('tr');
         tr.innerHTML = `
           <td>${new Date(r.$ts).toISOString()}</td>
           <td>${r.$dev ?? ''}</td>
-          <td><span class="pill ${(r.$uv==='GREEN')?'green':'red'}">${r.$uv ?? ''}</span></td>
-          <td>${r.$ta==null?'':Number(r.$ta).toFixed(2)}</td>
-          <td>${r.$tb==null?'':Number(r.$tb).toFixed(2)}</td>
+          <td><span class="pill ${(r.$uv === 'GREEN') ? 'green' : 'red'}">${r.$uv ?? ''}</span></td>
+          <td>${r.$ta == null ? '' : Number(r.$ta).toFixed(2)}</td>
+          <td>${r.$tb == null ? '' : Number(r.$tb).toFixed(2)}</td>
           <td>${r.$rssi ?? ''}</td>
           <td class="mono">${r.$fw ?? ''}</td>
         `;
@@ -340,16 +306,16 @@
       els.rows.appendChild(tr);
     }
 
-    // chart (windowed by range)
+    // chart (show ALL points)
     try {
-      renderTempsChartWindow(rows, hoursFromRangeValue(els.range.value));
-    } catch(e) {
+      renderTempsChartWindowAll(rowsChart);
+    } catch (e) {
       log('Chart render failed: ' + e.message);
     }
 
-    // staleness badge
-    if (rows.length){
-      const ageMin = Math.floor((Date.now() - new Date(rows[0].$ts).getTime())/60000);
+    // staleness badge (from table)
+    if (rowsTable.length) {
+      const ageMin = Math.floor((Date.now() - new Date(rowsTable[0].$ts).getTime()) / 60000);
       const fresh = ageMin <= 10;
       els.signal.textContent = fresh ? 'OK' : `STALE: ${ageMin}m`;
       els.signal.className = 'pill ' + (fresh ? 'green' : 'red');
@@ -358,34 +324,34 @@
       els.signal.className = 'pill red';
     }
 
-    els.status.textContent = `Last updated: ${new Date().toLocaleTimeString()} • ${els.range.options[els.range.selectedIndex].text} • query via: ${via}`;
-    log('Load done: rows=' + rows.length + ' (via ' + via + ')');
+    els.status.textContent = `Last updated: ${new Date().toLocaleTimeString()} • ${els.range.options[els.range.selectedIndex].text} • table via: ${viaTable}, chart via: ${viaChart}`;
+    log('Load done: table rows=' + rowsTable.length + ', chart rows=' + rowsChart.length);
   }
 
-  // --- chart (Temp A & B together; category axis, no time adapter needed) ---
-  function renderTempsChartWindow(rows, hours){
-    const { labels, A, B } = getChartWindow(rows, hours);
+  // --- chart (Temp A & B together; ALL points, no slotting) ---
+  function renderTempsChartWindowAll(rows) {
+    const { labels, A, B } = getChartWindowAll(rows);
 
     const ctx = document.getElementById('chartTemps').getContext('2d');
 
     const ds = [
-      { data:A, label:'Temp A (°C)', spanGaps:true, pointRadius:0, borderWidth:2 },
-      { data:B, label:'Temp B (°C)', spanGaps:true, pointRadius:0, borderWidth:2 }
+      { data: A, label: 'Temp A (°C)', spanGaps: true, pointRadius: 0, borderWidth: 2 },
+      { data: B, label: 'Temp B (°C)', spanGaps: true, pointRadius: 0, borderWidth: 2 }
     ];
 
     const opts = {
-      animation:false,
-      plugins:{ legend:{ display:true, position:'top' } },
-      scales:{
-        x:{ type:'category', ticks:{ autoSkip:true, maxRotation:0 } },
-        y:{ title:{ display:true, text:'°C' }, beginAtZero:false }
+      animation: false,
+      plugins: { legend: { display: true, position: 'top' } },
+      scales: {
+        x: { type: 'category', ticks: { autoSkip: true, maxRotation: 0 } },
+        y: { title: { display: true, text: '°C' }, beginAtZero: false }
       }
     };
 
     const data = { labels, datasets: ds };
 
-    if (!tempsChart){
-      tempsChart = new Chart(ctx, { type:'line', data, options:opts });
+    if (!tempsChart) {
+      tempsChart = new Chart(ctx, { type: 'line', data, options: opts });
     } else {
       tempsChart.data.labels = labels;
       tempsChart.data.datasets[0].data = A;
