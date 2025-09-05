@@ -90,7 +90,7 @@
     </div>
 
     <!-- Single combined chart -->
-    <canvas id="chartTemps" height="160"></canvas>
+    <canvas id="chartTemps" height="180"></canvas>
 
     <table style="margin-top:16px;">
       <thead>
@@ -117,7 +117,7 @@
   <script src="https://unpkg.com/@supabase/supabase-js@2"></script>
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
   <script>
-  // --- CONFIG ---
+  // --- CONFIG (as provided) ---
   const SUPABASE_URL = "https://ojomcciunusemwszdnrl.supabase.co";
   const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im9qb21jY2l1bnVzZW13c3pkbnJsIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTQ3MTUyODYsImV4cCI6MjA3MDI5MTI4Nn0.U7gKI4QOklKkSq_Jbfxm6hQBrvS4JipV7z6KtIl1kz8";
   const MANIFEST_URL = "https://ojomcciunusemwszdnrl.supabase.co/storage/v1/object/public/ota/manifest.json";
@@ -176,7 +176,6 @@
   }
 
   function rssiLabel(dbm){ if (dbm>=-60) return 'Excellent'; if (dbm>=-67) return 'Very good'; if (dbm>=-75) return 'Good'; if (dbm>=-82) return 'Fair'; if (dbm>=-90) return 'Poor'; return 'Very poor'; }
-
   function isRecent(tsIso, sec){ if (!tsIso) return false; return (Date.now()-new Date(tsIso).getTime()) <= sec*1000; }
 
   function hoursFromRangeValue(v){
@@ -188,9 +187,49 @@
   // --- data load ---
   let tempsChart=null;
 
+  async function fetchRows(fromIso){
+    // Try ts first
+    try{
+      const { data, error } = await sb.from('pump_readings')
+        .select('*')
+        .gte('ts', fromIso)
+        .order('ts', { ascending:false })
+        .limit(5000);
+      if (!error && data && data.length) return { data, via:'ts' };
+      if (error) log('Primary query (ts) error: ' + error.message);
+    }catch(e){ log('Primary query (ts) threw: ' + e.message); }
+
+    // Fallback inserted_at
+    try{
+      const { data, error } = await sb.from('pump_readings')
+        .select('*')
+        .gte('inserted_at', fromIso)
+        .order('inserted_at', { ascending:false })
+        .limit(5000);
+      if (!error && data && data.length) return { data, via:'inserted_at' };
+      if (error) log('Fallback query (inserted_at) error: ' + error.message);
+    }catch(e){ log('Fallback query (inserted_at) threw: ' + e.message); }
+
+    // Last resort: recent rows (no time filter)
+    try{
+      const { data, error } = await sb.from('pump_readings')
+        .select('*')
+        .order('ts', { ascending:false })
+        .limit(500);
+      if (!error && data) return { data, via:'no filter' };
+      if (error) log('Last-resort query error: ' + error.message);
+    }catch(e){ log('Last-resort query threw: ' + e.message); }
+
+    return { data: [], via:'none' };
+  }
+
   async function load(){
     const { data: { session } } = await sb.auth.getSession();
-    if (!session){ log('Not signed in.'); return; }
+    if (!session){
+      log('Not signed in.');
+      els.status.textContent = 'Not signed in.';
+      return;
+    }
 
     const hours = hoursFromRangeValue(els.range.value);
     const fromIso = new Date(Date.now() - hours*3600*1000).toISOString();
@@ -198,21 +237,12 @@
     els.status.textContent = `Loading… (${els.range.options[els.range.selectedIndex].text})`;
     log(`Load start (from ${fromIso})`);
 
-    // Grab rows where either ts >= fromIso OR inserted_at >= fromIso (covers older schemas)
-    let q = sb.from('pump_readings')
-      .select('*')
-      .or(`ts.gte.${fromIso},inserted_at.gte.${fromIso}`)
-      .order('ts', { ascending:false })
-      .limit(5000); // plenty for 90d at ~60s cadence with device downtime
-
-    const { data, error } = await q;
-    if (error){ els.status.textContent = 'Error: ' + error.message; log('Error: ' + error.message); return; }
-
-    const rows = augmentRows(data)
-      .filter(r => r.$ts) // ensure we have a timestamp to plot
+    const { data: raw, via } = await fetchRows(fromIso);
+    const rows = augmentRows(raw)
+      .filter(r => r.$ts) // need a timestamp
       .sort((a,b)=> new Date(b.$ts).getTime() - new Date(a.$ts).getTime());
 
-    describeDetection(data);
+    describeDetection(raw);
     els.count.textContent = rows.length;
 
     // latest badges
@@ -237,7 +267,7 @@
             els.rssiNow.textContent = `${avg.toFixed(0)} dBm (${rssiLabel(avg)})`;
           } else els.rssiNow.textContent = 'No signal';
         }
-      }catch(_){}
+      }catch(e){ log('device_status lookup failed: ' + e.message); }
     } else {
       els.latest.textContent = '—'; els.latest.className='pill';
       els.fwCurrent.textContent = '—'; els.rssiNow.textContent = '—';
@@ -259,8 +289,12 @@
       els.rows.appendChild(tr);
     }
 
-    // chart (ascending time for line continuity)
-    renderTempsChart(rows.slice().reverse());
+    // chart (ascending time), with hard guard so it never blocks status update
+    try {
+      renderTempsChart(rows.slice().reverse());
+    } catch(e) {
+      log('Chart render failed: ' + e.message);
+    }
 
     // staleness badge
     if (rows.length){
@@ -273,32 +307,32 @@
       els.signal.className = 'pill red';
     }
 
-    els.status.textContent = `Last updated: ${new Date().toLocaleTimeString()} • ${els.range.options[els.range.selectedIndex].text}`;
-    log('Load done: rows=' + rows.length);
+    els.status.textContent = `Last updated: ${new Date().toLocaleTimeString()} • ${els.range.options[els.range.selectedIndex].text} • query via: ${via}`;
+    log('Load done: rows=' + rows.length + ' (via ' + via + ')');
   }
 
-  // --- chart (Temp A & B together) ---
+  // --- chart (Temp A & B together; category axis, no time adapter needed) ---
   function renderTempsChart(ordered){
-    const labels = ordered.map(r => new Date(r.$ts));
+    const labels = ordered.map(r => {
+      const d = new Date(r.$ts);
+      // compact local string for category axis
+      return d.toLocaleString();
+    });
     const A = ordered.map(r => r.$ta==null?null:Number(r.$ta));
     const B = ordered.map(r => r.$tb==null?null:Number(r.$tb));
 
     const ctx = document.getElementById('chartTemps').getContext('2d');
 
-    const ds = [];
-    ds.push({ data:A, label:'Temp A (°C)', spanGaps:true, pointRadius:0, borderWidth:2 });
-    ds.push({ data:B, label:'Temp B (°C)', spanGaps:true, pointRadius:0, borderWidth:2 });
+    const ds = [
+      { data:A, label:'Temp A (°C)', spanGaps:true, pointRadius:0, borderWidth:2 },
+      { data:B, label:'Temp B (°C)', spanGaps:true, pointRadius:0, borderWidth:2 }
+    ];
 
     const opts = {
       animation:false,
-      parsing:false,
       plugins:{ legend:{ display:true, position:'top' } },
       scales:{
-        x:{
-          type:'time', // will fall back to category if adapter not present; labels still render
-          time:{ tooltipFormat:'PPpp' },
-          ticks:{ autoSkip:true, maxRotation:0 }
-        },
+        x:{ type:'category', ticks:{ autoSkip:true, maxRotation:0 } },
         y:{ title:{ display:true, text:'°C' }, beginAtZero:false }
       }
     };
@@ -306,9 +340,7 @@
     const data = { labels, datasets: ds };
 
     if (!tempsChart){
-      // If time adapter isn't loaded, Chart.js treats dates as values but still draws fine with default formatter.
-      try { tempsChart = new Chart(ctx, { type:'line', data, options:opts }); }
-      catch(_) { tempsChart = new Chart(ctx, { type:'line', data, options:{...opts, scales:{y:opts.scales.y}} }); }
+      tempsChart = new Chart(ctx, { type:'line', data, options:opts });
     } else {
       tempsChart.data.labels = labels;
       tempsChart.data.datasets[0].data = A;
@@ -369,7 +401,7 @@
   }
 
   document.getElementById('refresh').addEventListener('click', async ()=>{ await load(); await refreshFirmwareCompare(); });
-  document.getElementById('range').addEventListener('change', async ()=>{ await load(); /* chart + table reflect new window */ });
+  document.getElementById('range').addEventListener('change', async ()=>{ await load(); /* table + chart reflect new window */ });
   document.getElementById('fwCheckBtn').addEventListener('click', refreshFirmwareCompare);
   document.getElementById('fwForceBtn').addEventListener('click', copyForceCheck);
   document.getElementById('signin').addEventListener('click', async ()=>{
@@ -385,7 +417,10 @@
 
   // start + periodic refresh (10s)
   refreshAuthUI();
-  setInterval(async ()=>{ const { data:{session} } = await sb.auth.getSession(); if (session) { await load(); await refreshFirmwareCompare(); } }, 10000);
+  setInterval(async ()=>{
+    const { data:{session} } = await sb.auth.getSession();
+    if (session) { await load(); await refreshFirmwareCompare(); }
+  }, 10000);
   </script>
 </body>
 </html>
