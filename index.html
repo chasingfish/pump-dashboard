@@ -38,7 +38,7 @@
   </div>
 
   <div id="app" style="display:none;">
-    <h1>Pump Readings</h1>
+    <h1>Pump Readingzzzs</h1>
 
     <div class="row">
       <label for="range">Time range:</label>
@@ -280,7 +280,9 @@
       return;
     }
 
-    const { fromMs, toMs, hours } = computeWindow();
+    const hours = hoursFromRangeValue(els.range.value);
+    const toMs = Date.now(); // exact current time
+    const fromMs = toMs - hours * 3600 * 1000;
     const fromIso = new Date(fromMs).toISOString();
     const toIso   = new Date(toMs).toISOString();
     const unit    = chooseTimeUnit(hours);
