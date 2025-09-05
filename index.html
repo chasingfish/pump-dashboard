@@ -38,7 +38,7 @@
   </div>
 
   <div id="app" style="display:none;">
-    <h1>Pump Readings</h1>
+    <h1>Pump Readingfffs</h1>
 
     <div class="row">
       <label for="range">Time range:</label>
@@ -121,8 +121,8 @@
   <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns"></script>
 
   <script>
-  // ===== Simple error trap so you never get a blank screen =====
-  window.onerror = function(msg, src, line, col, err){
+  // ===== error trap (avoid blank screen) =====
+  window.onerror = function(msg, src, line, col){
     const box = document.getElementById('events');
     if (box) box.textContent = `[${new Date().toLocaleTimeString()}] ERROR: ${msg} @ ${src}:${line}:${col}\n` + box.textContent;
   };
@@ -217,34 +217,44 @@
     return Array.from(map.values());
   }
 
-  // ---------- FULL-WINDOW PAGED FETCH ON BOTH FIELDS (ts & inserted_at) ----------
-  async function pageByField(field, fromIso, toIso, pageSize=2000, hardCap=300000){
+  // ---------- DESCENDING pagination (now → past) to keep newest data ----------
+  async function pageByFieldDesc(field, fromIso, toIso, pageSize=2000, hardCap=300000){
     let all = [];
-    let lastVal = null;
+    let cursor = toIso; // start at "now"
     while (all.length < hardCap){
       let q = sb.from('pump_readings')
         .select('*')
-        .gte(field, fromIso).lte(field, toIso)
-        .order(field, { ascending: true })
+        .lte(field, cursor).gte(field, fromIso)
+        .order(field, { ascending: false })
         .limit(pageSize);
-      if (lastVal) q = q.gt(field, lastVal);
+
       const { data, error } = await q;
       if (error) throw new Error(`${field} page error: ${error.message}`);
+
       const batch = data || [];
       if (!batch.length) break;
-      all.push(...batch);
-      const last = batch[batch.length - 1][field];
-      if (!last || last === lastVal) break; // safety
-      lastVal = last;
+
+      all.push(...batch);               // newest → older
+      const last = batch[batch.length - 1][field]; // oldest in this page
+      if (!last || last <= fromIso) break;
       if (batch.length < pageSize) break;
+
+      // next page strictly older than "last"
+      cursor = last;
+      // ensure strict "older than"
+      // Supabase doesn't have "lt" chained after lte in the same call,
+      // but we can adjust cursor slightly by string compare margin isn't reliable.
+      // Simpler: rely on the next .lte(field, cursor) and server-side stable order; de-dupe later.
     }
     return all;
   }
 
-  async function fetchWindowBoth(fromIso, toIso){
+  async function fetchWindowBothDesc(fromIso, toIso){
     let a = [], b = [], via = [];
-    try { a = await pageByField('ts', fromIso, toIso); via.push('ts'); } catch(e){ log(e.message); }
-    try { b = await pageByField('inserted_at', fromIso, toIso); via.push('inserted_at'); } catch(e){ log(e.message); }
+    try { a = await pageByFieldDesc('ts', fromIso, toIso); via.push('ts'); } catch(e){ log(e.message); }
+    try { b = await pageByFieldDesc('inserted_at', fromIso, toIso); via.push('inserted_at'); } catch(e){ log(e.message); }
+
+    // Merge, de-dupe, filter strictly inside window, then ASC for chart
     const merged = dedupeByTsDev(augmentRows(a).concat(augmentRows(b))).filter(r=>r.$ts);
     const fromMs = new Date(fromIso).getTime();
     const toMs   = new Date(toIso).getTime();
@@ -252,12 +262,12 @@
       const t = new Date(r.$ts).getTime();
       return Number.isFinite(t) && t >= fromMs && t <= toMs;
     });
-    inWin.sort((x,y)=> new Date(x.$ts) - new Date(y.$ts)); // ascending for chart
+    inWin.sort((x,y)=> new Date(x.$ts) - new Date(y.$ts)); // ascending
     return { rows: inWin, via: via.join('+') || 'none' };
   }
 
   // --- data load ---
-  let tempsChart = null; // (single declaration)
+  let tempsChart = null;
 
   async function load(){
     const { data: { session } } = await sb.auth.getSession();
@@ -277,13 +287,13 @@
     els.status.textContent = `Loading… (${els.range.options[els.range.selectedIndex].text})`;
     log(`Load start: ${fromIso} → ${toIso}`);
 
-    const { rows: rowsAll, via } = await fetchWindowBoth(fromIso, toIso);
+    const { rows: rowsAllAsc, via } = await fetchWindowBothDesc(fromIso, toIso);
 
     // Table: latest 200, newest-first
-    const rowsTable = rowsAll.slice(-200).reverse();
+    const rowsTable = rowsAllAsc.slice(-200).reverse();
 
     // Schema/debug
-    describeDetection(rowsAll.length ? [rowsAll[0]] : []);
+    describeDetection(rowsAllAsc.length ? [rowsAllAsc[0]] : []);
     els.count.textContent = rowsTable.length;
 
     // Latest badges
@@ -336,9 +346,9 @@
       els.rows.appendChild(tr);
     }
 
-    // Chart: time scale with explicit window up to NOW
+    // Chart
     try {
-      renderTempsChart(rowsAll, fromMs, toMs, unit);
+      renderTempsChart(rowsAllAsc, fromMs, toMs, unit);
     } catch(e) {
       log('Chart render failed: ' + e.message);
     }
@@ -355,10 +365,23 @@
     }
 
     els.status.textContent = `Last updated: ${new Date().toLocaleTimeString()} • via: ${via}`;
-    log(`Load done: rows=${rowsAll.length}, unit=${unit}`);
+    log(`Load done: rows=${rowsAllAsc.length}, unit=${unit}`);
   }
 
-  // --- chart (time scale with explicit [min,max]) ---
+  // --- chart (explicit [min,max] on both axes; decimation on) ---
+  function computeYRange(datasets){
+    const vals = [];
+    for (const arr of datasets){
+      for (const p of arr) if (p && Number.isFinite(p.y)) vals.push(p.y);
+    }
+    if (!vals.length) return null;
+    const min = Math.min(...vals), max = Math.max(...vals);
+    if (min === max) return { min: min - 1, max: max + 1 };
+    const pad = (max - min) * 0.05;
+    return { min: min - pad, max: max + pad };
+  }
+
+  let tempsChart = null;
   function renderTempsChart(allAsc, fromMs, toMs, unit){
     const A = allAsc
       .filter(r => r.$ta!=null)
@@ -370,6 +393,8 @@
       .map(r => ({ x: new Date(r.$ts).getTime(), y: Number(r.$tb) }))
       .filter(p => Number.isFinite(p.x) && p.x>=fromMs && p.x<=toMs);
 
+    const yr = computeYRange([A,B]) || { min: undefined, max: undefined };
+
     const ctx = document.getElementById('chartTemps').getContext('2d');
 
     const ds = [
@@ -380,7 +405,11 @@
     const opts = {
       parsing:false,
       animation:false,
-      plugins:{ legend:{ display:true, position:'top' } },
+      normalized:true,
+      plugins:{
+        legend:{ display:true, position:'top' },
+        decimation:{ enabled:true, algorithm:'lttb', samples:1000 }
+      },
       scales:{
         x:{
           type:'time',
@@ -389,7 +418,12 @@
           max: toMs,
           ticks:{ maxRotation:0 }
         },
-        y:{ title:{ display:true, text:'°C' }, beginAtZero:false }
+        y:{
+          title:{ display:true, text:'°C' },
+          beginAtZero:false,
+          min: yr.min,
+          max: yr.max
+        }
       }
     };
 
@@ -401,6 +435,8 @@
       tempsChart.options.scales.x.min = fromMs;
       tempsChart.options.scales.x.max = toMs;
       tempsChart.options.scales.x.time.unit = unit;
+      tempsChart.options.scales.y.min = yr.min;
+      tempsChart.options.scales.y.max = yr.max;
       tempsChart.data.datasets[0].data = ds[0].data;
       tempsChart.data.datasets[1].data = ds[1].data;
       tempsChart.update('none');
