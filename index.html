@@ -90,7 +90,7 @@
     </div>
 
     <!-- Single combined chart -->
-    <canvas id="chartTemps" height="200"></canvas>
+    <canvas id="chartTemps" height="180"></canvas>
 
     <table style="margin-top:16px;">
       <thead>
@@ -117,7 +117,7 @@
   <script src="https://unpkg.com/@supabase/supabase-js@2"></script>
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
   <script>
-  // --- CONFIG ---
+  // --- CONFIG (as provided) ---
   const SUPABASE_URL = "https://ojomcciunusemwszdnrl.supabase.co";
   const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im9qb21jY2l1bnVzZW13c3pkbnJsIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTQ3MTUyODYsImV4cCI6MjA3MDI5MTI4Nn0.U7gKI4QOklKkSq_Jbfxm6hQBrvS4JipV7z6KtIl1kz8";
   const MANIFEST_URL = "https://ojomcciunusemwszdnrl.supabase.co/storage/v1/object/public/ota/manifest.json";
@@ -184,43 +184,11 @@
     return d * 24; // '7d','30d','90d'
   }
 
-  // Choose a step that keeps ~1k-1.5k points total for performance & clarity
-  function chooseStepMs(hours){
-    if (hours <= 24) return 60*1000;           // 1 min → <= 1440 pts
-    if (hours <= 24*7) return 10*60*1000;      // 10 min → <= 1008 pts
-    if (hours <= 24*30) return 30*60*1000;     // 30 min → <= 1440 pts
-    return 2*60*60*1000;                       // 2 h → <= 1080 pts for 90d
-  }
-
-  // Build a uniform time grid covering [startMs, endMs] inclusive
-  function buildTimeGrid(startMs, endMs, stepMs){
-    const grid = [];
-    // snap start to step boundary for stable buckets
-    const snappedStart = Math.floor(startMs / stepMs) * stepMs;
-    for (let t = snappedStart; t <= endMs; t += stepMs) grid.push(t);
-    return grid;
-  }
-
-  // Bin readings into the grid (exact bucket by floor index). Nulls remain for gaps.
-  function binSeries(rows, gridStartMs, stepMs, bins){
-    const A = new Array(bins).fill(null);
-    const B = new Array(bins).fill(null);
-    for (const r of rows){
-      const ts = new Date(r.$ts).getTime();
-      const idx = Math.floor((ts - gridStartMs) / stepMs);
-      if (idx >= 0 && idx < bins){
-        if (r.$ta != null) A[idx] = Number(r.$ta);
-        if (r.$tb != null) B[idx] = Number(r.$tb);
-      }
-    }
-    return { A, B };
-  }
-
   // --- data load ---
   let tempsChart=null;
 
   async function fetchRows(fromIso){
-    // Prefer ts filter
+    // Try ts first
     try{
       const { data, error } = await sb.from('pump_readings')
         .select('*')
@@ -264,13 +232,195 @@
     }
 
     const hours = hoursFromRangeValue(els.range.value);
-    const stepMs = chooseStepMs(hours);
-    const endMs = Date.now();
-    const startMs = endMs - hours*3600*1000;
-    const fromIso = new Date(startMs).toISOString();
+    const fromIso = new Date(Date.now() - hours*3600*1000).toISOString();
 
     els.status.textContent = `Loading… (${els.range.options[els.range.selectedIndex].text})`;
-    log(`Load start (from ${fromIso}) step=${Math.round(stepMs/60000)}m`);
+    log(`Load start (from ${fromIso})`);
 
     const { data: raw, via } = await fetchRows(fromIso);
-    const rows
+    const rows = augmentRows(raw)
+      .filter(r => r.$ts) // need a timestamp
+      .sort((a,b)=> new Date(b.$ts).getTime() - new Date(a.$ts).getTime());
+
+    describeDetection(raw);
+    els.count.textContent = rows.length;
+
+    // latest badges
+    if (rows.length){
+      const latest = rows[0];
+      els.latest.textContent = latest.$uv || '—';
+      els.latest.className = 'pill ' + ((latest.$uv==='GREEN') ? 'green' : 'red');
+      els.tempALatest.textContent = (latest.$ta==null)?'—':(+latest.$ta).toFixed(2)+' °C';
+      els.tempBLatest.textContent = (latest.$tb==null)?'—':(+latest.$tb).toFixed(2)+' °C';
+      els.fwCurrent.textContent = latest.$fw || '—';
+
+      // device_status summary (best effort)
+      try{
+        const did = latest.$dev;
+        const { data: ds } = await sb.from('device_status').select('last_seen_ts,last_online_ts,online').eq('device_id', did).single();
+        if (ds){
+          els.lastconn.textContent = ds.last_online_ts ? new Date(ds.last_online_ts).toLocaleString() : (ds.online?'now':'—');
+          els.lastseen.textContent = ds.last_seen_ts ? new Date(ds.last_seen_ts).toLocaleString() : (ds.online?'now':'—');
+          const fresh = rows.filter(r => r.$rssi!=null && isRecent(r.$ts,120)).slice(0,5);
+          if (fresh.length){
+            const avg = fresh.reduce((s,r)=>s+Number(r.$rssi),0)/fresh.length;
+            els.rssiNow.textContent = `${avg.toFixed(0)} dBm (${rssiLabel(avg)})`;
+          } else els.rssiNow.textContent = 'No signal';
+        }
+      }catch(e){ log('device_status lookup failed: ' + e.message); }
+    } else {
+      els.latest.textContent = '—'; els.latest.className='pill';
+      els.fwCurrent.textContent = '—'; els.rssiNow.textContent = '—';
+    }
+
+    // table (descending time)
+    els.rows.innerHTML = '';
+    for (const r of rows){
+      const tr = document.createElement('tr');
+      tr.innerHTML = `
+        <td>${new Date(r.$ts).toISOString()}</td>
+        <td>${r.$dev ?? ''}</td>
+        <td><span class="pill ${(r.$uv==='GREEN')?'green':'red'}">${r.$uv ?? ''}</span></td>
+        <td>${r.$ta==null?'':Number(r.$ta).toFixed(2)}</td>
+        <td>${r.$tb==null?'':Number(r.$tb).toFixed(2)}</td>
+        <td>${r.$rssi ?? ''}</td>
+        <td class="mono">${r.$fw ?? ''}</td>
+      `;
+      els.rows.appendChild(tr);
+    }
+
+    // chart (ascending time), with hard guard so it never blocks status update
+    try {
+      renderTempsChart(rows.slice().reverse());
+    } catch(e) {
+      log('Chart render failed: ' + e.message);
+    }
+
+    // staleness badge
+    if (rows.length){
+      const ageMin = Math.floor((Date.now() - new Date(rows[0].$ts).getTime())/60000);
+      const fresh = ageMin <= 10;
+      els.signal.textContent = fresh ? 'OK' : `STALE: ${ageMin}m`;
+      els.signal.className = 'pill ' + (fresh ? 'green' : 'red');
+    } else {
+      els.signal.textContent = 'NO DATA';
+      els.signal.className = 'pill red';
+    }
+
+    els.status.textContent = `Last updated: ${new Date().toLocaleTimeString()} • ${els.range.options[els.range.selectedIndex].text} • query via: ${via}`;
+    log('Load done: rows=' + rows.length + ' (via ' + via + ')');
+  }
+
+  // --- chart (Temp A & B together; category axis, no time adapter needed) ---
+  function renderTempsChart(ordered){
+    const labels = ordered.map(r => {
+      const d = new Date(r.$ts);
+      // compact local string for category axis
+      return d.toLocaleString();
+    });
+    const A = ordered.map(r => r.$ta==null?null:Number(r.$ta));
+    const B = ordered.map(r => r.$tb==null?null:Number(r.$tb));
+
+    const ctx = document.getElementById('chartTemps').getContext('2d');
+
+    const ds = [
+      { data:A, label:'Temp A (°C)', spanGaps:true, pointRadius:0, borderWidth:2 },
+      { data:B, label:'Temp B (°C)', spanGaps:true, pointRadius:0, borderWidth:2 }
+    ];
+
+    const opts = {
+      animation:false,
+      plugins:{ legend:{ display:true, position:'top' } },
+      scales:{
+        x:{ type:'category', ticks:{ autoSkip:true, maxRotation:0 } },
+        y:{ title:{ display:true, text:'°C' }, beginAtZero:false }
+      }
+    };
+
+    const data = { labels, datasets: ds };
+
+    if (!tempsChart){
+      tempsChart = new Chart(ctx, { type:'line', data, options:opts });
+    } else {
+      tempsChart.data.labels = labels;
+      tempsChart.data.datasets[0].data = A;
+      tempsChart.data.datasets[1].data = B;
+      tempsChart.update('none');
+    }
+  }
+
+  // --- manifest compare ---
+  function cmpSemver(a,b){ const pa=String(a).split('.').map(n=>parseInt(n,10)); const pb=String(b).split('.').map(n=>parseInt(n,10)); for(let i=0;i<3;i++){const x=pa[i]||0,y=pb[i]||0;if(x!==y)return x<y?-1:1;} return 0; }
+  async function fetchManifest(){ const url = MANIFEST_URL + '?cb=' + Date.now(); const res = await fetch(url,{cache:'no-store'}); if(!res.ok) throw new Error('manifest fetch '+res.status); return res.json(); }
+  async function refreshFirmwareCompare(){
+    els.fwMsg.textContent='Fetching manifest…'; els.fwCmdWrap.style.display='none';
+    try{
+      const m = await fetchManifest();
+      const mver = m.version || '—';
+      els.fwManifest.textContent = mver;
+
+      const cur = (els.fwCurrent.textContent||'').trim();
+      if (!cur || cur==='—' || !mver || mver==='—'){
+        els.fwUpdateFlag.textContent='—'; els.fwUpdateFlag.className='pill';
+        els.fwMsg.textContent = cur && cur!=='—' ? 'Manifest loaded.' : 'Manifest loaded; waiting for device FW…';
+        log('Manifest fetched, current FW ' + (cur && cur!=='—' ? cur : 'unknown') + '.');
+        return;
+      }
+      const newer = cmpSemver(cur, mver) < 0;
+      els.fwUpdateFlag.textContent = newer ? 'YES' : 'No';
+      els.fwUpdateFlag.className = 'pill ' + (newer ? 'red' : 'green');
+      els.fwMsg.textContent = newer ? 'New firmware available in manifest.' : 'Device is up to date.';
+      log(`Manifest compare: current=${cur}, manifest=${mver}, update=${newer?'YES':'No'}`);
+    }catch(e){
+      els.fwManifest.textContent='—'; els.fwUpdateFlag.textContent='—'; els.fwUpdateFlag.className='pill';
+      els.fwMsg.textContent='Manifest fetch failed.'; log('Manifest fetch failed: '+e.message);
+    }
+  }
+
+  // --- force-check command copy ---
+  function buildForceCheckCommand(){
+    const topic = MQTT.topicCmd(MQTT.devId);
+    return `"C:\\Program Files\\mosquitto\\mosquitto_pub.exe" -h ${MQTT.host} -p ${MQTT.port} -V mqttv311 --cafile "${MQTT.cafile}" -u ${MQTT.user} -P ${MQTT.pass} -t "${topic}" -m "{\\"cmd\\":\\"check_update\\"}"`;
+  }
+  async function copyForceCheck(){
+    const cmd = buildForceCheckCommand();
+    try{ await navigator.clipboard.writeText(cmd); }catch(_){}
+    els.fwCmdText.textContent = cmd;
+    els.fwCmdWrap.style.display = 'block';
+    els.fwMsg.textContent = 'Command copied. Paste into Command Prompt.';
+    log('Force-check command copied.');
+  }
+
+  // --- auth & wiring ---
+  async function refreshAuthUI(){
+    const { data: { session } } = await sb.auth.getSession();
+    const authed = !!session;
+    document.getElementById('auth').style.display = authed ? 'none' : 'block';
+    document.getElementById('app').style.display  = authed ? 'block' : 'none';
+    if (authed){ await load(); await refreshFirmwareCompare(); }
+  }
+
+  document.getElementById('refresh').addEventListener('click', async ()=>{ await load(); await refreshFirmwareCompare(); });
+  document.getElementById('range').addEventListener('change', async ()=>{ await load(); /* table + chart reflect new window */ });
+  document.getElementById('fwCheckBtn').addEventListener('click', refreshFirmwareCompare);
+  document.getElementById('fwForceBtn').addEventListener('click', copyForceCheck);
+  document.getElementById('signin').addEventListener('click', async ()=>{
+    document.getElementById('authMsg').textContent = '';
+    const { error } = await sb.auth.signInWithPassword({
+      email: document.getElementById('email').value.trim(),
+      password: document.getElementById('password').value
+    });
+    if (error){ document.getElementById('authMsg').textContent = error.message; return; }
+    await refreshAuthUI();
+  });
+  document.getElementById('signout').addEventListener('click', async ()=>{ await sb.auth.signOut(); await refreshAuthUI(); });
+
+  // start + periodic refresh (10s)
+  refreshAuthUI();
+  setInterval(async ()=>{
+    const { data:{session} } = await sb.auth.getSession();
+    if (session) { await load(); await refreshFirmwareCompare(); }
+  }, 10000);
+  </script>
+</body>
+</html>
