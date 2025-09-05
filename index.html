@@ -38,7 +38,7 @@
   </div>
 
   <div id="app" style="display:none;">
-    <h1>Pump Readingfffs</h1>
+    <h1>Pump Readings</h1>
 
     <div class="row">
       <label for="range">Time range:</label>
@@ -267,6 +267,7 @@
   }
 
   // --- data load ---
+  // ...existing code...
   let tempsChart = null;
 
   async function load(){
@@ -381,7 +382,7 @@
     return { min: min - pad, max: max + pad };
   }
 
-  let tempsChart = null;
+  // Removed duplicate declaration of tempsChart
   function renderTempsChart(allAsc, fromMs, toMs, unit){
     const A = allAsc
       .filter(r => r.$ta!=null)
