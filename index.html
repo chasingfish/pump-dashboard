@@ -190,10 +190,14 @@
   // Fetch ALL rows for chart, limited by time range, up to 5000 (or more if needed)
   async function fetchRowsForChart(fromIso) {
     try {
+      // Remove .gte('ts', fromIso) and use .lte('ts', now) and .gte('ts', fromIso)
+      // This ensures we get all data in the range, not just the latest
+      const nowIso = new Date().toISOString();
       const { data, error } = await sb.from('pump_readings')
         .select('*')
         .gte('ts', fromIso)
-        .order('ts', { ascending: false })
+        .lte('ts', nowIso)
+        .order('ts', { ascending: true }) // ascending for chart
         .limit(5000); // Increase if needed
       if (!error && data) return { data, via: 'ts' };
       if (error) log('Chart query error: ' + error.message);
@@ -204,9 +208,11 @@
   // Fetch rows for table (limit to 100 for display)
   async function fetchRowsForTable(fromIso) {
     try {
+      const nowIso = new Date().toISOString();
       const { data, error } = await sb.from('pump_readings')
         .select('*')
         .gte('ts', fromIso)
+        .lte('ts', nowIso)
         .order('ts', { ascending: false })
         .limit(100);
       if (!error && data) return { data, via: 'ts' };
@@ -218,8 +224,7 @@
   // Chart window: show ALL points, no slotting
   function getChartWindowAll(rows) {
     if (!rows.length) return { labels: [], A: [], B: [] };
-    // Sort ascending by time
-    rows = rows.slice().sort((a, b) => new Date(a.$ts) - new Date(b.$ts));
+    // Already sorted ascending by time
     return {
       labels: rows.map(r => new Date(r.$ts).toLocaleString()),
       A: rows.map(r => r.$ta == null ? null : Number(r.$ta)),
