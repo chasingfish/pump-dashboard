@@ -44,7 +44,8 @@
       <label for="range">Time range:</label>
       <select id="range">
         <option value="24h" selected>Last 24 hours</option>
-        <option value="7d">Last 1 week</option>
+        <option value="3d">Last 3 days</option>
+        <option value="7d">Last 7 days</option>
         <option value="30d">Last 30 days</option>
         <option value="90d">Last 90 days</option>
       </select>
@@ -60,10 +61,8 @@
       <div class="kv">
         <div class="muted">Current device FW</div>
         <div><span id="fwCurrent" class="mono">—</span></div>
-
         <div class="muted">Manifest FW</div>
         <div><span id="fwManifest" class="mono">—</span></div>
-
         <div class="muted">Update available</div>
         <div><span id="fwUpdateFlag" class="pill">—</span></div>
       </div>
@@ -117,7 +116,7 @@
   <script src="https://unpkg.com/@supabase/supabase-js@2"></script>
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
   <script>
-  // --- CONFIG (as provided) ---
+  // --- CONFIG ---
   const SUPABASE_URL = "https://ojomcciunusemwszdnrl.supabase.co";
   const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im9qb21jY2l1bnVzZW13c3pkbnJsIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTQ3MTUyODYsImV4cCI6MjA3MDI5MTI4Nn0.U7gKI4QOklKkSq_Jbfxm6hQBrvS4JipV7z6KtIl1kz8";
   const MANIFEST_URL = "https://ojomcciunusemwszdnrl.supabase.co/storage/v1/object/public/ota/manifest.json";
@@ -180,24 +179,21 @@
 
   function hoursFromRangeValue(v){
     if (v.endsWith('h')) return parseInt(v,10);
-    const d = parseInt(v,10);
-    return d * 24; // '7d','30d','90d'
+    if (v.endsWith('d')) return parseInt(v,10)*24;
+    return 24;
   }
 
   // --- data load ---
   let tempsChart = null;
 
   // Fetch ALL rows for chart, limited by time range, up to 5000 (or more if needed)
-  async function fetchRowsForChart(fromIso) {
+  async function fetchRowsForChart(fromIso, toIso) {
     try {
-      // Remove .gte('ts', fromIso) and use .lte('ts', now) and .gte('ts', fromIso)
-      // This ensures we get all data in the range, not just the latest
-      const nowIso = new Date().toISOString();
       const { data, error } = await sb.from('pump_readings')
         .select('*')
         .gte('ts', fromIso)
-        .lte('ts', nowIso)
-        .order('ts', { ascending: true }) // ascending for chart
+        .lte('ts', toIso)
+        .order('ts', { ascending: true })
         .limit(5000); // Increase if needed
       if (!error && data) return { data, via: 'ts' };
       if (error) log('Chart query error: ' + error.message);
@@ -206,13 +202,12 @@
   }
 
   // Fetch rows for table (limit to 100 for display)
-  async function fetchRowsForTable(fromIso) {
+  async function fetchRowsForTable(fromIso, toIso) {
     try {
-      const nowIso = new Date().toISOString();
       const { data, error } = await sb.from('pump_readings')
         .select('*')
         .gte('ts', fromIso)
-        .lte('ts', nowIso)
+        .lte('ts', toIso)
         .order('ts', { ascending: false })
         .limit(100);
       if (!error && data) return { data, via: 'ts' };
@@ -241,19 +236,22 @@
     }
 
     const hours = hoursFromRangeValue(els.range.value);
-    const fromIso = new Date(Date.now() - hours * 3600 * 1000).toISOString();
+    const now = new Date();
+    const from = new Date(now.getTime() - hours * 3600 * 1000);
+    const fromIso = from.toISOString();
+    const toIso = now.toISOString();
 
     els.status.textContent = `Loading… (${els.range.options[els.range.selectedIndex].text})`;
-    log(`Load start (from ${fromIso})`);
+    log(`Load start (from ${fromIso} to ${toIso})`);
 
     // Table rows (limit 100)
-    const { data: rawTable, via: viaTable } = await fetchRowsForTable(fromIso);
+    const { data: rawTable, via: viaTable } = await fetchRowsForTable(fromIso, toIso);
     const rowsTable = augmentRows(rawTable)
       .filter(r => r.$ts)
       .sort((a, b) => new Date(b.$ts).getTime() - new Date(a.$ts).getTime());
 
     // Chart rows (limit 5000)
-    const { data: rawChart, via: viaChart } = await fetchRowsForChart(fromIso);
+    const { data: rawChart, via: viaChart } = await fetchRowsForChart(fromIso, toIso);
     const rowsChart = augmentRows(rawChart)
       .filter(r => r.$ts);
 
@@ -417,7 +415,7 @@
   }
 
   document.getElementById('refresh').addEventListener('click', async ()=>{ await load(); await refreshFirmwareCompare(); });
-  document.getElementById('range').addEventListener('change', async ()=>{ await load(); /* table + chart reflect new window */ });
+  document.getElementById('range').addEventListener('change', async ()=>{ await load(); });
   document.getElementById('fwCheckBtn').addEventListener('click', refreshFirmwareCompare);
   document.getElementById('fwForceBtn').addEventListener('click', copyForceCheck);
   document.getElementById('signin').addEventListener('click', async ()=>{
