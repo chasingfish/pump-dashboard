@@ -38,7 +38,7 @@
   </div>
 
   <div id="app" style="display:none;">
-    <h1>Pump Readings34</h1>
+    <h1>Pump Readingsz</h1>
 
     <div class="row">
       <label for="range">Time range:</label>
@@ -91,7 +91,7 @@
       <div>Latest Temp B: <span id="tempBLatest">—</span></div>
     </div>
 
-    <!-- Single combined chart -->
+    <!-- Combined chart -->
     <canvas id="chartTemps" height="180"></canvas>
 
     <table style="margin-top:16px;">
@@ -180,7 +180,6 @@
   }
 
   function rssiLabel(dbm){ if (dbm>=-60) return 'Excellent'; if (dbm>=-67) return 'Very good'; if (dbm>=-75) return 'Good'; if (dbm>=-82) return 'Fair'; if (dbm>=-90) return 'Poor'; return 'Very poor'; }
-  function isRecent(tsIso, sec){ if (!tsIso) return false; return (Date.now()-new Date(tsIso).getTime()) <= sec*1000; }
 
   function hoursFromRangeValue(v){
     if (v.endsWith('h')) return parseInt(v,10);
@@ -189,13 +188,12 @@
   }
 
   function chooseTimeUnit(hours){
-    if (hours <= 36) return 'hour';   // 12h, 24h
-    return 'day';                     // 3d..90d (shows recent days clearly)
+    return (hours <= 48) ? 'hour' : 'day';
   }
 
   function computeWindow(){
     const hours = hoursFromRangeValue(els.range.value);
-    const toMs = Date.now();                 // now (client)
+    const toMs = Date.now(); // now
     const fromMs = toMs - hours * 3600 * 1000;
     return { fromMs, toMs, hours };
   }
@@ -209,58 +207,59 @@
     return Array.from(map.values());
   }
 
+  // -------- Paged fetch across the full window (no truncation) --------
+  async function fetchWindowPaged({ fromIso, toIso, pageSize=5000, hardCap=200000 }){
+    let all = []; let lastTs = null; let via = 'ts'; let tries = 0;
+
+    async function pageWithTs(afterTs){
+      let q = sb.from('pump_readings').select('*')
+        .gte('ts', fromIso).lte('ts', toIso)
+        .order('ts', { ascending: true })
+        .limit(pageSize);
+      if (afterTs) q = q.gt('ts', afterTs);
+      const { data, error } = await q;
+      if (error) throw new Error(error.message);
+      return data || [];
+    }
+
+    async function pageWithInserted(afterTs){
+      let q = sb.from('pump_readings').select('*')
+        .gte('inserted_at', fromIso).lte('inserted_at', toIso)
+        .order('inserted_at', { ascending: true })
+        .limit(pageSize);
+      if (afterTs) q = q.gt('inserted_at', afterTs);
+      const { data, error } = await q;
+      if (error) throw new Error(error.message);
+      return data || [];
+    }
+
+    // First try paging on ts
+    try{
+      while (all.length < hardCap){
+        const batch = await pageWithTs(lastTs);
+        if (!batch.length) break;
+        all.push(...batch);
+        lastTs = batch[batch.length - 1].ts || batch[batch.length - 1].inserted_at || null;
+        tries++; if (batch.length < pageSize) break;
+      }
+    }catch(e){
+      // Fallback: page on inserted_at
+      via = 'inserted_at';
+      all = []; lastTs = null;
+      while (all.length < hardCap){
+        const batch = await pageWithInserted(lastTs);
+        if (!batch.length) break;
+        all.push(...batch);
+        lastTs = batch[batch.length - 1].inserted_at || batch[batch.length - 1].ts || null;
+        tries++; if (batch.length < pageSize) break;
+      }
+    }
+
+    return { data: all, via, pages: tries };
+  }
+
   // --- data load ---
   let tempsChart=null;
-
-  // Main windowed query (newest-first) with fallback to inserted_at
-  async function fetchWindowed(fromIso, toIso, limit){
-    // Primary: filter by ts, newest-first
-    try{
-      const { data, error } = await sb.from('pump_readings')
-        .select('*')
-        .gte('ts', fromIso).lte('ts', toIso)
-        .order('ts', { ascending: false })
-        .limit(limit);
-      if (!error && data) return { data, via:'ts' };
-      if (error) log('Query (ts) error: ' + error.message);
-    }catch(e){ log('Query (ts) threw: ' + e.message); }
-
-    // Fallback: filter by inserted_at, newest-first
-    try{
-      const { data, error } = await sb.from('pump_readings')
-        .select('*')
-        .gte('inserted_at', fromIso).lte('inserted_at', toIso)
-        .order('inserted_at', { ascending: false })
-        .limit(limit);
-      if (!error && data) return { data, via:'inserted_at' };
-      if (error) log('Query (inserted_at) error: ' + error.message);
-    }catch(e){ log('Query (inserted_at) threw: ' + e.message); }
-
-    // Last resort: latest rows (no filter)
-    try{
-      const { data, error } = await sb.from('pump_readings')
-        .select('*')
-        .order('ts', { ascending: false })
-        .limit(Math.min(limit, 500));
-      if (!error && data) return { data, via:'no filter' };
-      if (error) log('Last-resort query error: ' + error.message);
-    }catch(e){ log('Last-resort query threw: ' + e.message); }
-
-    return { data: [], via:'none' };
-  }
-
-  // Safety top-up: pull latest N rows regardless of range, then filter in-memory
-  async function fetchLatestTopUp(limit){
-    try{
-      const { data, error } = await sb.from('pump_readings')
-        .select('*')
-        .order('ts', { ascending:false })
-        .limit(limit);
-      if (!error && data) return data;
-      if (error) log('Top-up query error: ' + error.message);
-    }catch(e){ log('Top-up threw: ' + e.message); }
-    return [];
-  }
 
   async function load(){
     const { data: { session } } = await sb.auth.getSession();
@@ -271,46 +270,28 @@
     }
 
     const { fromMs, toMs, hours } = computeWindow();
-    const fromIso = new Date(fromMs).toISOString(); // UTC
-    const toIso   = new Date(toMs).toISOString();   // UTC
+    const fromIso = new Date(fromMs).toISOString();
+    const toIso   = new Date(toMs).toISOString();
     const unit    = chooseTimeUnit(hours);
 
     els.status.textContent = `Loading… (${els.range.options[els.range.selectedIndex].text})`;
     log(`Load start: ${fromIso} → ${toIso}`);
 
-    // Choose sensible caps per range
-    const cap = hours <= 36 ? 25000
-              : hours <= 24*7 ? 50000
-              : 100000;
+    // Page size & cap tuned for your ranges
+    const pageSize = 5000;
+    const hardCap  = hours <= 48 ? 100000 : 200000;
 
-    // 1) Table (newest-first, small cap)
-    const { data: rawTable, via: viaTable } = await fetchWindowed(fromIso, toIso, 200);
-    let rowsTable = augmentRows(rawTable).filter(r => r.$ts);
-    rowsTable.sort((a,b)=> new Date(b.$ts) - new Date(a.$ts));
+    // Fetch the *entire* window ascending (no truncation)
+    const { data: rawWin, via } = await fetchWindowPaged({ fromIso, toIso, pageSize, hardCap });
+    const rowsAll = augmentRows(rawWin).filter(r => r.$ts);
 
-    // 2) Chart (newest-first, larger cap)
-    const { data: rawChart, via: viaChart } = await fetchWindowed(fromIso, toIso, cap);
-    let rowsChart = augmentRows(rawChart).filter(r => r.$ts);
+    // For table: newest-first small slice
+    const rowsTable = rowsAll.slice(-200).reverse(); // last 200
 
-    // 3) Safety top-up to ensure latest points are present
-    const topUp = await fetchLatestTopUp(1000);
-    if (topUp.length){
-      const aug = augmentRows(topUp).filter(r => r.$ts);
-      const inRange = aug.filter(r => {
-        const t = new Date(r.$ts).getTime();
-        return t >= fromMs && t <= toMs;
-      });
-      rowsChart = dedupeByTsDev(rowsChart.concat(inRange));
-      rowsTable = dedupeByTsDev(rowsTable.concat(inRange));
-    }
-
-    // Final sort for chart: ascending time for nicer lines
-    rowsChart.sort((a,b)=> new Date(a.$ts) - new Date(b.$ts));
-
-    describeDetection(rawTable);
+    describeDetection(rawWin);
     els.count.textContent = rowsTable.length;
 
-    // latest badges (from newest-first table)
+    // latest badges
     if (rowsTable.length){
       const latest = rowsTable[0];
       els.latest.textContent = latest.$uv || '—';
@@ -326,7 +307,7 @@
         if (ds){
           els.lastconn.textContent = ds.last_online_ts ? new Date(ds.last_online_ts).toLocaleString() : (ds.online?'now':'—');
           els.lastseen.textContent = ds.last_seen_ts ? new Date(ds.last_seen_ts).toLocaleString() : (ds.online?'now':'—');
-          const fresh = rowsTable.filter(r => r.$rssi!=null && isRecent(r.$ts,120)).slice(0,5);
+          const fresh = rowsTable.filter(r => r.$rssi!=null && (Date.now()-new Date(r.$ts).getTime())<=120000).slice(0,5);
           if (fresh.length){
             const avg = fresh.reduce((s,r)=>s+Number(r.$rssi),0)/fresh.length;
             els.rssiNow.textContent = `${avg.toFixed(0)} dBm (${rssiLabel(avg)})`;
@@ -338,7 +319,7 @@
       els.fwCurrent.textContent = '—'; els.rssiNow.textContent = '—';
     }
 
-    // table (descending time)
+    // table render
     els.rows.innerHTML = '';
     if (rowsTable.length){
       for (const r of rowsTable){
@@ -360,9 +341,9 @@
       els.rows.appendChild(tr);
     }
 
-    // chart (time axis with explicit [min,max] window up to "now")
+    // chart (time axis with explicit [min,max] to "now")
     try {
-      renderTempsChart(rowsChart, fromMs, toMs, chooseTimeUnit(hours));
+      renderTempsChart(rowsAll, fromMs, toMs, unit);
     } catch(e) {
       log('Chart render failed: ' + e.message);
     }
@@ -378,19 +359,18 @@
       els.signal.className = 'pill red';
     }
 
-    els.status.textContent =
-      `Last updated: ${new Date().toLocaleTimeString()} • ${els.range.options[els.range.selectedIndex].text}`;
-    log(`Load done: table=${rowsTable.length}, chart=${rowsChart.length}`);
+    els.status.textContent = `Last updated: ${new Date().toLocaleTimeString()} • via: ${via}`;
+    log(`Load done: rows=${rowsAll.length} (pages across ${via})`);
   }
 
   // --- chart (time scale with explicit window) ---
-  function renderTempsChart(ordered, fromMs, toMs, unit){
-    const A = ordered
+  function renderTempsChart(allAsc, fromMs, toMs, unit){
+    const A = allAsc
       .filter(r => r.$ta!=null)
       .map(r => ({ x: new Date(r.$ts).getTime(), y: Number(r.$ta) }))
       .filter(p => p.x>=fromMs && p.x<=toMs);
 
-    const B = ordered
+    const B = allAsc
       .filter(r => r.$tb!=null)
       .map(r => ({ x: new Date(r.$ts).getTime(), y: Number(r.$tb) }))
       .filter(p => p.x>=fromMs && p.x<=toMs);
