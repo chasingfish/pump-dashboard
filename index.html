@@ -1,549 +1,489 @@
 <!doctype html>
-<html>
+<html lang="en">
 <head>
   <meta charset="utf-8" />
-  <title>Pump Readings</title>
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>LCR Pump Monitor</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta name="theme-color" content="#0b1220" />
+  <link rel="manifest" href="manifest.webmanifest" />
+  <link rel="apple-touch-icon" href="icon.svg" />
+  <link rel="icon" href="icon.svg" />
+  <meta name="mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="apple-mobile-web-app-title" content="Pump" />
   <style>
-    :root { --fg:#111; --muted:#666; --line:#e9e9e9; --bg:#fff; }
-    body { font:14px/1.5 system-ui,-apple-system,Segoe UI,Roboto,sans-serif; color:var(--fg); background:var(--bg); margin:20px; }
-    h1 { margin:0 0 10px; font-size:20px; }
-    .row { display:flex; flex-wrap:wrap; gap:10px; align-items:center; margin-bottom:12px; }
-    .panel { border:1px solid #eee; border-radius:10px; padding:12px; margin:14px 0; box-shadow:0 1px 2px rgba(0,0,0,0.04); }
-    .kv { display:grid; grid-template-columns: 160px 1fr; gap:6px 10px; align-items:center; }
-    .pill { padding:2px 8px; border-radius:12px; display:inline-block; border:1px solid var(--line); }
-    .green { background:#e6f7ec; color:#156d2f; }
-    .red   { background:#fde8e8; color:#9b1c1c; }
-    .muted { color:var(--muted); }
-    .small { font-size:12px; }
-    .mono { font-family: ui-monospace,SFMono-Regular,Menlo,Consolas,"Liberation Mono",monospace; }
-    button, input, select { padding:8px 10px; border:1px solid var(--line); border-radius:8px; background:#fff; }
-    button { cursor:pointer; }
-    table { border-collapse: collapse; width:100%; }
-    th, td { border:1px solid #ddd; padding:8px; }
-    th { background:#f7f7f7; text-align:left; }
-    #events { white-space:pre-wrap; max-height:160px; overflow:auto; border:1px solid #eee; border-radius:8px; padding:8px; background:#fafafa; }
-    #schema { word-break: break-all; }
+    :root{
+      --bg:#0b1220; --bg2:#111a2e; --card:#15203a; --card2:#1b2747;
+      --line:#26324f; --fg:#eaf0ff; --muted:#93a1c4; --faint:#64739a;
+      --ok:#22c55e; --okbg:#0f2c1c; --bad:#ef4444; --badbg:#2c1212;
+      --warn:#f59e0b; --warnbg:#2c2208; --accent:#3b82f6; --accent2:#2563eb;
+      --radius:18px; --shadow:0 6px 24px rgba(0,0,0,.35);
+    }
+    @media (prefers-color-scheme: light){
+      :root{ --bg:#f3f5fb; --bg2:#e9edf7; --card:#ffffff; --card2:#f6f8fe;
+        --line:#e2e8f5; --fg:#0e1730; --muted:#5a6a8c; --faint:#8a98b8;
+        --okbg:#e7f8ee; --badbg:#fdeaea; --warnbg:#fef3e0; --shadow:0 6px 20px rgba(20,30,60,.08); }
+    }
+    *{ box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
+    html,body{ margin:0; background:linear-gradient(180deg,var(--bg),var(--bg2)); color:var(--fg);
+      font:16px/1.45 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif; min-height:100%; }
+    .wrap{ max-width:560px; margin:0 auto; padding:16px 16px calc(40px + env(safe-area-inset-bottom)); }
+    header{ display:flex; align-items:center; gap:10px; margin:6px 0 18px; }
+    header h1{ font-size:18px; margin:0; font-weight:700; letter-spacing:.2px; }
+    header .sub{ font-size:12px; color:var(--muted); }
+    .dot{ width:10px; height:10px; border-radius:50%; background:var(--faint); flex:none; box-shadow:0 0 0 3px rgba(255,255,255,.04); }
+    .dot.on{ background:var(--ok); } .dot.off{ background:var(--bad); } .dot.stale{ background:var(--warn); }
+    .spacer{ flex:1; }
+    .ghost{ background:transparent; color:var(--muted); border:1px solid var(--line); border-radius:10px; padding:7px 11px; font-size:13px; cursor:pointer; }
+
+    .card{ background:var(--card); border:1px solid var(--line); border-radius:var(--radius);
+      padding:16px; margin:12px 0; box-shadow:var(--shadow); }
+    .card h2{ font-size:13px; letter-spacing:.6px; text-transform:uppercase; color:var(--muted); margin:0 0 12px; font-weight:600; }
+
+    /* Emergency banner */
+    .alert{ background:var(--badbg); border:1px solid var(--bad); color:#ffd9d9; border-radius:var(--radius);
+      padding:14px 16px; margin:12px 0; display:none; }
+    .alert.show{ display:block; }
+    .alert b{ color:#fff; }
+
+    /* Big STOP button */
+    .stopall{ width:100%; border:none; border-radius:var(--radius); padding:22px; font-size:22px; font-weight:800;
+      letter-spacing:.5px; color:#fff; background:linear-gradient(180deg,#ef4444,#c81e1e); cursor:pointer;
+      box-shadow:0 8px 22px rgba(220,40,40,.35); margin:4px 0 6px; }
+    .stopall:active{ transform:translateY(1px); }
+    .stopall small{ display:block; font-size:12px; font-weight:600; opacity:.85; margin-top:4px; letter-spacing:.3px; }
+
+    /* Pump rows */
+    .pump{ display:flex; align-items:center; gap:14px; padding:14px 0; border-top:1px solid var(--line); }
+    .pump:first-of-type{ border-top:none; }
+    .pump .meta{ flex:1; min-width:0; }
+    .pump .name{ font-weight:700; font-size:16px; }
+    .pump .temp{ font-size:13px; color:var(--muted); margin-top:2px; }
+    .badge{ font-size:12px; font-weight:700; padding:3px 9px; border-radius:999px; border:1px solid var(--line); }
+    .badge.on{ background:var(--okbg); color:var(--ok); border-color:transparent; }
+    .badge.off{ background:var(--badbg); color:var(--bad); border-color:transparent; }
+    .badge.unk{ color:var(--faint); }
+    .toggle{ border:none; border-radius:12px; padding:11px 16px; font-weight:700; font-size:14px; cursor:pointer; min-width:74px; }
+    .toggle.off{ background:linear-gradient(180deg,#ef4444,#d12424); color:#fff; }
+    .toggle.on{ background:linear-gradient(180deg,#22c55e,#16a34a); color:#06210f; }
+    .toggle.reset{ background:linear-gradient(180deg,#f59e0b,#d97706); color:#2a1c00; }
+    .toggle:disabled{ opacity:.4; cursor:default; }
+
+    /* Stat grid */
+    .grid{ display:grid; grid-template-columns:1fr 1fr; gap:12px; }
+    .stat{ background:var(--card2); border:1px solid var(--line); border-radius:14px; padding:12px; }
+    .stat .l{ font-size:11px; color:var(--faint); text-transform:uppercase; letter-spacing:.5px; }
+    .stat .v{ font-size:20px; font-weight:700; margin-top:3px; }
+    .stat .v small{ font-size:12px; color:var(--muted); font-weight:500; }
+    .bar{ height:6px; border-radius:4px; background:var(--line); margin-top:8px; overflow:hidden; }
+    .bar i{ display:block; height:100%; border-radius:4px; background:var(--ok); width:0; transition:width .4s; }
+
+    .rowflex{ display:flex; gap:10px; align-items:center; flex-wrap:wrap; }
+    select,button.mini{ background:var(--card2); color:var(--fg); border:1px solid var(--line); border-radius:10px; padding:9px 11px; font-size:14px; }
+    button.mini{ cursor:pointer; }
+    canvas{ width:100% !important; }
+
+    table{ border-collapse:collapse; width:100%; font-size:13px; }
+    th,td{ padding:8px 6px; border-bottom:1px solid var(--line); text-align:left; white-space:nowrap; }
+    th{ color:var(--faint); font-weight:600; font-size:11px; text-transform:uppercase; letter-spacing:.5px; }
+    .pill{ font-size:11px; font-weight:700; padding:2px 7px; border-radius:999px; }
+    .pill.green{ background:var(--okbg); color:var(--ok); } .pill.red{ background:var(--badbg); color:var(--bad); }
+    .mono{ font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; }
+    details{ margin-top:6px; } summary{ cursor:pointer; color:var(--muted); font-size:13px; }
+    #events{ white-space:pre-wrap; max-height:160px; overflow:auto; font-size:11px; color:var(--faint);
+      background:var(--bg); border:1px solid var(--line); border-radius:10px; padding:8px; margin-top:8px; }
+    .muted{ color:var(--muted); } .small{ font-size:12px; }
+
+    /* Toast */
+    #toast{ position:fixed; left:50%; bottom:24px; transform:translateX(-50%) translateY(20px);
+      background:#000d; color:#fff; padding:11px 16px; border-radius:12px; font-size:14px; opacity:0;
+      transition:.25s; pointer-events:none; max-width:90vw; text-align:center; z-index:50; }
+    #toast.show{ opacity:1; transform:translateX(-50%) translateY(0); }
+
+    /* Login */
+    #auth{ max-width:360px; margin:14vh auto 0; }
+    #auth input{ width:100%; background:var(--card2); color:var(--fg); border:1px solid var(--line);
+      border-radius:12px; padding:13px; font-size:16px; margin:8px 0; }
+    #auth button{ width:100%; background:linear-gradient(180deg,var(--accent),var(--accent2)); color:#fff;
+      border:none; border-radius:12px; padding:14px; font-size:16px; font-weight:700; cursor:pointer; margin-top:6px; }
+    #authMsg{ color:var(--bad); font-size:14px; margin-top:8px; min-height:18px; }
   </style>
 </head>
 <body>
-  <div id="auth" style="margin-bottom:16px; display:none;">
-    <h2>Sign in</h2>
-    <div class="row">
-      <input id="email" type="email" placeholder="Email" />
-      <input id="password" type="password" placeholder="Password" />
-      <button id="signin">Sign in</button>
-    </div>
-    <div id="authMsg" style="color:#b00;"></div>
+<div class="wrap">
+
+  <!-- LOGIN -->
+  <div id="auth" style="display:none;">
+    <h1 style="text-align:center; font-size:22px;">💧 LCR Pump</h1>
+    <p class="muted small" style="text-align:center;">Sign in to view & control the pump.</p>
+    <input id="email" type="email" inputmode="email" autocomplete="username" placeholder="Email" />
+    <input id="password" type="password" autocomplete="current-password" placeholder="Password" />
+    <button id="signin">Sign in</button>
+    <div id="authMsg"></div>
   </div>
 
+  <!-- APP -->
   <div id="app" style="display:none;">
-    <h1>Pump Readingyyys</h1>
+    <header>
+      <span id="connDot" class="dot"></span>
+      <div>
+        <h1>LCR Pump Monitor</h1>
+        <div id="connText" class="sub">—</div>
+      </div>
+      <span class="spacer"></span>
+      <button id="signout" class="ghost">Sign out</button>
+    </header>
 
-    <div class="row">
-      <label for="range">Time range:</label>
-      <select id="range">
-        <option value="12h">Last 12 hours</option>
-        <option value="24h" selected>Last 24 hours</option>
-        <option value="3d">Last 3 days</option>
-        <option value="7d">Last 1 week</option>
-        <option value="30d">Last 30 days</option>
-        <option value="90d">Last 90 days</option>
-      </select>
-      <button id="refresh">Refresh</button>
-      <div id="status" class="muted small"></div>
-      <div style="flex:1"></div>
-      <button id="signout" title="Sign out of this browser">Sign out</button>
+    <!-- Emergency banner -->
+    <div id="emerg" class="alert"></div>
+
+    <!-- Controls -->
+    <div class="card">
+      <h2>Controls</h2>
+      <button id="stopAll" class="stopall">STOP BOTH PUMPS<small>cuts power immediately · float switch still protects</small></button>
+
+      <div class="pump">
+        <div class="meta">
+          <div class="name">🌱 Irrigation</div>
+          <div id="tempA" class="temp">—</div>
+        </div>
+        <span id="badgeA" class="badge unk">—</span>
+        <button id="btnA" class="toggle off" data-ch="1">OFF</button>
+      </div>
+
+      <div class="pump">
+        <div class="meta">
+          <div class="name">🏠 House</div>
+          <div id="tempB" class="temp">—</div>
+        </div>
+        <span id="badgeB" class="badge unk">—</span>
+        <button id="btnB" class="toggle off" data-ch="2">OFF</button>
+      </div>
+
+      <div id="ctrlNote" class="small muted" style="margin-top:10px; display:none;"></div>
     </div>
 
-    <!-- Firmware panel -->
-    <div class="panel">
-      <h3 style="margin-top:0;">Firmware</h3>
-      <div class="kv">
-        <div class="muted">Current device FW</div>
-        <div><span id="fwCurrent" class="mono">—</span></div>
-
-        <div class="muted">Manifest FW</div>
-        <div><span id="fwManifest" class="mono">—</span></div>
-
-        <div class="muted">Update available</div>
-        <div><span id="fwUpdateFlag" class="pill">—</span></div>
+    <!-- Signal health -->
+    <div class="card">
+      <h2>Signal &amp; Status</h2>
+      <div class="grid">
+        <div class="stat">
+          <div class="l">Wi-Fi signal</div>
+          <div class="v"><span id="rssiVal">—</span> <small id="rssiLbl"></small></div>
+          <div class="bar"><i id="rssiBar"></i></div>
+        </div>
+        <div class="stat">
+          <div class="l">Last reading</div>
+          <div class="v" id="lastAgo">—</div>
+          <div class="small muted" id="lastAbs">—</div>
+        </div>
+        <div class="stat">
+          <div class="l">Firmware</div>
+          <div class="v mono" id="fwVal" style="font-size:16px;">—</div>
+          <div class="small" id="fwFlag"></div>
+        </div>
+        <div class="stat">
+          <div class="l">Last reconnect</div>
+          <div class="v" id="upVal" style="font-size:16px;">—</div>
+          <div class="small muted" id="guardVal">—</div>
+        </div>
       </div>
-      <div class="row" style="margin-top:10px;">
-        <button id="fwCheckBtn">Check (compare)</button>
-        <button id="fwForceBtn" title="Copies a mosquitto command to force a manifest check">Force device to check now</button>
-        <span id="fwMsg" class="muted small"></span>
-      </div>
-      <div id="fwCmdWrap" class="small mono" style="display:none; margin-top:8px;">
-        <div class="muted">Copied to clipboard:</div>
-        <div id="fwCmdText"></div>
+      <div id="weakWarn" class="small" style="color:var(--warn); margin-top:10px; display:none;">
+        ⚠️ Weak signal — connection may drop. Consider relocating the antenna out of the pit.
       </div>
     </div>
 
-    <div class="row">
-      <div>Latest: <span id="latest" class="pill"></span></div>
-      <div>Total rows: <strong id="count">0</strong></div>
-      <div>Signal: <span id="signal" class="pill"></span></div>
-      <div>Last connected: <span id="lastconn">—</span></div>
-      <div>Last seen: <span id="lastseen">—</span></div>
-      <div>Wi-Fi: <span id="rssiNow">—</span></div>
-      <div>Latest Temp A: <span id="tempALatest">—</span></div>
-      <div>Latest Temp B: <span id="tempBLatest">—</span></div>
+    <!-- Trend -->
+    <div class="card">
+      <div class="rowflex" style="justify-content:space-between; margin-bottom:10px;">
+        <h2 style="margin:0;">Temperature (°F)</h2>
+        <select id="range">
+          <option value="12h">12 h</option>
+          <option value="24h" selected>24 h</option>
+          <option value="3d">3 days</option>
+          <option value="7d">1 week</option>
+          <option value="30d">30 days</option>
+        </select>
+      </div>
+      <canvas id="chartTemps" height="170"></canvas>
     </div>
 
-    <!-- Chart -->
-    <canvas id="chartTemps" height="180"></canvas>
+    <!-- Recent + debug -->
+    <div class="card">
+      <h2>Recent readings</h2>
+      <details>
+        <summary>Show table (<span id="count">0</span> rows) &amp; debug log</summary>
+        <div style="overflow-x:auto; margin-top:10px;">
+          <table>
+            <thead><tr><th>Local time</th><th>Status</th><th>Irrig °F</th><th>House °F</th><th>RSSI</th><th>FW</th></tr></thead>
+            <tbody id="rows"></tbody>
+          </table>
+        </div>
+        <div class="rowflex" style="margin-top:12px;">
+          <button id="fwCheckBtn" class="mini">Check firmware</button>
+          <button id="fwForceBtn" class="mini">Force device check</button>
+          <span id="fwMsg" class="small muted"></span>
+        </div>
+        <div id="events"></div>
+      </details>
+    </div>
 
-    <table style="margin-top:16px;">
-      <thead>
-        <tr>
-          <th>Time (UTC)</th>
-          <th>Device</th>
-          <th>Status</th>
-          <th>Temp A °C</th>
-          <th>Temp B °C</th>
-          <th>RSSI</th>
-          <th>FW</th>
-        </tr>
-      </thead>
-      <tbody id="rows"></tbody>
-    </table>
-
-    <div class="panel" style="margin-top:16px;">
-      <h3 style="margin-top:0;">Events</h3>
-      <div id="events" class="mono small"></div>
-      <div id="schema" class="mono small muted" style="margin-top:6px;"></div>
+    <div class="small faint" style="text-align:center; color:var(--faint); margin-top:6px;">
+      Auto-refreshes every 10s · <span id="updated">—</span>
     </div>
   </div>
+</div>
 
-  <script src="https://unpkg.com/@supabase/supabase-js@2"></script>
-  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns"></script>
+<div id="toast"></div>
 
-  <script>
-  // ===== error trap (avoid blank screen) =====
-  window.onerror = function(msg, src, line, col){
-    const box = document.getElementById('events');
-    if (box) box.textContent = `[${new Date().toLocaleTimeString()}] ERROR: ${msg} @ ${src}:${line}:${col}\n` + box.textContent;
-  };
-  window.addEventListener('unhandledrejection', (e)=>{
-    const box = document.getElementById('events');
-    if (box) box.textContent = `[${new Date().toLocaleTimeString()}] PROMISE ERROR: ${e.reason}\n` + box.textContent;
+<script src="https://unpkg.com/@supabase/supabase-js@2"></script>
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns"></script>
+<script>
+/* ===================== CONFIG ===================== */
+const SUPABASE_URL = "https://dupkdblxunebiduigman.supabase.co";
+const SUPABASE_ANON_KEY = "sb_publishable_Ou1MOqjDMTnkkKoXbQPQUA_oTFuEBgq";
+const MANIFEST_URL = "https://dupkdblxunebiduigman.supabase.co/storage/v1/object/public/ota/manifest.json";
+// Railway subscriber public URL (POST /control). Set after deploying the subscriber
+// with a public domain. Leave "" to keep control buttons disabled.
+const CONTROL_ENDPOINT = "https://pump-cloud-subscriber-production.up.railway.app";
+/* ================================================= */
+
+const sb = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+const $ = id => document.getElementById(id);
+
+window.onerror = (m,s,l,c)=> log(`ERROR: ${m} @${l}:${c}`);
+window.addEventListener('unhandledrejection', e=> log('PROMISE ERR: '+e.reason));
+function log(m){ const b=$('events'); if(b) b.textContent = `[${new Date().toLocaleTimeString()}] ${m}\n`+b.textContent; }
+
+let toastT;
+function toast(m){ const t=$('toast'); t.textContent=m; t.classList.add('show'); clearTimeout(toastT); toastT=setTimeout(()=>t.classList.remove('show'),2600); }
+
+/* ---------- helpers ---------- */
+const cToF = c => (c==null||isNaN(c)) ? null : (c*9/5+32);
+const fF = c => { const f=cToF(c); return f==null ? '—' : f.toFixed(0)+'°F'; };
+function rssiLabel(d){ if(d>=-60)return'Excellent'; if(d>=-67)return'Very good'; if(d>=-75)return'Good'; if(d>=-82)return'Fair'; if(d>=-90)return'Poor'; return'Very poor'; }
+function rssiPct(d){ if(d==null) return 0; return Math.max(0, Math.min(100, Math.round(2*(d+100)))); } // -100→0, -50→100
+function ago(ms){ const s=Math.floor((Date.now()-ms)/1000); if(s<60)return s+'s ago'; const m=Math.floor(s/60); if(m<60)return m+'m ago'; const h=Math.floor(m/60); if(h<24)return h+'h ago'; return Math.floor(h/24)+'d ago'; }
+function tz(){ try{ return Intl.DateTimeFormat().resolvedOptions().timeZone.split('/').pop().replace('_',' '); }catch{ return 'local'; } }
+
+function parseRaw(r){ try{ if(typeof r.raw==='string') return JSON.parse(r.raw); if(r.raw&&typeof r.raw==='object') return r.raw; }catch{} return {}; }
+function augment(rows){ return rows.map(r=>{ const o=parseRaw(r); return {
+  ...r,
+  $ts:  r.ts ?? r.inserted_at ?? o.ts ?? null,
+  $uv:  r.uv_status ?? o.uv_status ?? null,
+  $rssi:r.rssi ?? o.rssi ?? null,
+  $fw:  r.fw ?? o.fw ?? null,
+  $ta:  o.temp_pump_a_c ?? r.temp_pump_a_c ?? r.temp_c ?? null,
+  $tb:  o.temp_pump_b_c ?? r.temp_pump_b_c ?? null,
+  $aOn: o.pump_a_on, $bOn:o.pump_b_on, $latchA:o.latch_a, $latchB:o.latch_b,
+  $guard:o.guard, $limitC:o.guard_limit_c, $dev:r.device_id ?? o.device_id ?? null
+}; }); }
+
+/* ---------- data fetch ---------- */
+function rangeHours(v){ return v.endsWith('h') ? parseInt(v,10) : parseInt(v,10)*24; }
+async function fetchWindow(fromIso,toIso){
+  const rows=[]; let off=0; const page=1000;
+  for(;;){
+    const { data,error } = await sb.from('pump_readings').select('*')
+      .gte('ts',fromIso).lte('ts',toIso).order('ts',{ascending:true}).range(off,off+page-1);
+    if(error){ log('fetch: '+error.message); break; }
+    const b=data||[]; rows.push(...b); if(b.length<page) break; off+=page; if(rows.length>200000) break;
+  }
+  return augment(rows).filter(r=>r.$ts);
+}
+
+/* ---------- render ---------- */
+let chart=null;
+async function load(){
+  const { data:{session} } = await sb.auth.getSession();
+  if(!session){ showAuth(); return; }
+
+  const hours=rangeHours($('range').value);
+  const toMs=Date.now(), fromMs=toMs-hours*3600e3;
+  const rowsAsc = await fetchWindow(new Date(fromMs).toISOString(), new Date(toMs).toISOString());
+  const table = rowsAsc.slice(-200).reverse();
+  $('count').textContent = table.length;
+
+  const latest = table[0] || null;
+  renderLatest(latest);
+  await renderDeviceStatus(latest, table);
+  renderTable(table);
+  renderChart(rowsAsc, fromMs, toMs, hours<=48?'hour':'day');
+  $('updated').textContent = 'updated '+new Date().toLocaleTimeString();
+}
+
+function setPump(badge, btn, on, latched){
+  const b=$(badge), t=$(btn);
+  if(on===undefined||on===null){ b.className='badge unk'; b.textContent='—'; }
+  else if(latched){ b.className='badge off'; b.textContent='E-STOP'; }
+  else { b.className='badge '+(on?'on':'off'); b.textContent=on?'RUNNING':'OFF'; }
+  if(latched){ t.className='toggle reset'; t.textContent='RESET'; t.dataset.mode='reset'; }
+  else { const willOff = on!==false; t.className='toggle '+(willOff?'off':'on'); t.textContent=willOff?'OFF':'ON'; t.dataset.mode='toggle'; }
+}
+
+function renderLatest(l){
+  if(!l){ $('tempA').textContent='no data'; $('tempB').textContent='no data'; return; }
+  $('tempA').textContent = 'Pump temp '+fF(l.$ta);
+  $('tempB').textContent = 'Pump temp '+fF(l.$tb);
+  setPump('badgeA','btnA', l.$aOn, l.$latchA);
+  setPump('badgeB','btnB', l.$bOn, l.$latchB);
+
+  // Emergency banner
+  const e=$('emerg');
+  if(l.$latchA||l.$latchB){
+    const who=[l.$latchA?'Irrigation':null, l.$latchB?'House':null].filter(Boolean).join(' & ');
+    e.className='alert show';
+    e.innerHTML=`🚨 <b>Emergency stop active: ${who}.</b> A pump overheated and was shut off. Check the pump, then tap RESET.`;
+  } else e.className='alert';
+
+  // Guard line
+  if(l.$guard!==undefined) $('guardVal').textContent = l.$guard ? `Guard ON @ ${fF(l.$limitC)}` : 'Temp guard OFF';
+
+  // FW
+  $('fwVal').textContent = l.$fw || '—';
+}
+
+async function renderDeviceStatus(latest, recent){
+  // signal = most recent VALID (non-zero) rssi; latest heartbeat is often 0 mid-drop
+  let rssi=null;
+  const r = (recent||[]).find(x => x.$rssi!=null && Number(x.$rssi)!==0);
+  if(r) rssi=Number(r.$rssi);
+  $('rssiVal').textContent = rssi==null ? '—' : rssi+' dBm';
+  $('rssiLbl').textContent = rssi==null ? '' : '· '+rssiLabel(rssi);
+  $('rssiBar').style.width = rssiPct(rssi)+'%';
+  $('rssiBar').style.background = rssi==null?'var(--faint)':(rssi>=-75?'var(--ok)':rssi>=-85?'var(--warn)':'var(--bad)');
+  $('weakWarn').style.display = (rssi!=null && rssi<=-83) ? 'block' : 'none';
+
+  if(latest && latest.$ts){
+    const ms=new Date(latest.$ts).getTime();
+    $('lastAgo').textContent = ago(ms);
+    $('lastAbs').textContent = new Date(ms).toLocaleString()+' ('+tz()+')';
+  }
+
+  // connection dot + online-since
+  try{
+    const did = latest ? latest.$dev : 'pump-1';
+    const { data:ds } = await sb.from('device_status').select('online,last_online_ts,last_seen_ts').eq('device_id',did).single();
+    const freshMs = latest ? (Date.now()-new Date(latest.$ts).getTime()) : Infinity;
+    const fresh = freshMs<=120000;
+    const dot=$('connDot');
+    // Board flaps on weak wifi: if data is still fresh, it's effectively connected even
+    // when the retained online flag momentarily reads 0.
+    if(fresh && ds&&ds.online){ dot.className='dot on'; $('connText').textContent='Online · live'; }
+    else if(fresh){ dot.className='dot stale'; $('connText').textContent='Online · reconnecting'; }
+    else if(ds&&ds.online){ dot.className='dot stale'; $('connText').textContent='Connected · data delayed'; }
+    else { dot.className='dot off'; $('connText').textContent='Offline'; }
+    if(ds&&ds.last_online_ts) $('upVal').textContent = new Date(ds.last_online_ts).toLocaleTimeString();
+  }catch(e){ log('device_status: '+e.message); }
+}
+
+function renderTable(rows){
+  const tb=$('rows'); tb.innerHTML='';
+  if(!rows.length){ tb.innerHTML='<tr><td colspan="6" style="text-align:center;color:var(--faint);">No data.</td></tr>'; return; }
+  for(const r of rows){
+    const tr=document.createElement('tr');
+    tr.innerHTML=`<td>${new Date(r.$ts).toLocaleString()}</td>
+      <td><span class="pill ${r.$uv==='GREEN'?'green':'red'}">${r.$uv||'—'}</span></td>
+      <td>${cToF(r.$ta)==null?'':cToF(r.$ta).toFixed(0)}</td>
+      <td>${cToF(r.$tb)==null?'':cToF(r.$tb).toFixed(0)}</td>
+      <td>${r.$rssi??''}</td><td class="mono">${r.$fw||''}</td>`;
+    tb.appendChild(tr);
+  }
+}
+
+function renderChart(asc, fromMs, toMs, unit){
+  const mk = key => asc.filter(r=>r[key]!=null).map(r=>({x:new Date(r.$ts).getTime(), y:cToF(r[key])}))
+                       .filter(p=>Number.isFinite(p.x)&&p.x>=fromMs&&p.x<=toMs&&Number.isFinite(p.y));
+  const A=mk('$ta'), B=mk('$tb');
+  const ctx=$('chartTemps').getContext('2d');
+  const ds=[{data:A,label:'Irrigation',borderColor:'#22c55e',backgroundColor:'#22c55e22',spanGaps:true,pointRadius:0,borderWidth:2,parsing:false,tension:.25},
+            {data:B,label:'House',borderColor:'#3b82f6',backgroundColor:'#3b82f622',spanGaps:true,pointRadius:0,borderWidth:2,parsing:false,tension:.25}];
+  const opts={ parsing:false, animation:false, normalized:true, maintainAspectRatio:true,
+    plugins:{ legend:{display:true,position:'top',labels:{color:'#93a1c4',boxWidth:12}},
+      decimation:{enabled:(A.length+B.length)>2000,algorithm:'lttb',samples:800} },
+    scales:{ x:{type:'time',time:{unit},min:fromMs,max:toMs,ticks:{color:'#64739a',maxRotation:0},grid:{color:'#26324f55'}},
+             y:{title:{display:true,text:'°F',color:'#64739a'},ticks:{color:'#64739a'},grid:{color:'#26324f55'}} } };
+  if(!chart) chart=new Chart(ctx,{type:'line',data:{datasets:ds},options:opts});
+  else { chart.data.datasets[0].data=A; chart.data.datasets[1].data=B;
+    chart.options.scales.x.min=fromMs; chart.options.scales.x.max=toMs; chart.options.scales.x.time.unit=unit;
+    chart.options.plugins.decimation.enabled=(A.length+B.length)>2000; chart.update('none'); }
+}
+
+/* ---------- control ---------- */
+async function sendControl(payload, confirmMsg){
+  if(confirmMsg && !confirm(confirmMsg)) return;
+  if(!CONTROL_ENDPOINT){ toast('Control endpoint not set up yet.'); return; }
+  const { data:{session} } = await sb.auth.getSession();
+  if(!session){ toast('Please sign in.'); return; }
+  try{
+    const res=await fetch(CONTROL_ENDPOINT.replace(/\/$/,'')+'/control',{
+      method:'POST', headers:{'Content-Type':'application/json','Authorization':'Bearer '+session.access_token},
+      body:JSON.stringify(payload)});
+    const j=await res.json().catch(()=>({}));
+    if(!res.ok){ toast('Failed: '+(j.error||res.status)); log('control fail: '+JSON.stringify(j)); return; }
+    toast('Sent ✓'); setTimeout(load,1500);
+  }catch(e){ toast('Error: '+e.message); }
+}
+function wireToggle(btnId, ch, name){
+  $(btnId).addEventListener('click', ()=>{
+    const m=$(btnId).dataset.mode;
+    if(m==='reset') sendControl({action:'reset',ch}, `Clear the emergency stop on ${name}? Only do this once the pump is safe.`);
+    else { const turningOff = $(btnId).textContent==='OFF';
+      sendControl({ch,state:turningOff?'off':'on'}, turningOff?`Turn the ${name} pump OFF?`:null); }
   });
+}
 
-  // --- CONFIG ---
-  const SUPABASE_URL = "https://dupkdblxunebiduigman.supabase.co";
-  const SUPABASE_ANON_KEY = "sb_publishable_Ou1MOqjDMTnkkKoXbQPQUA_oTFuEBgq";
-  const MANIFEST_URL = "https://dupkdblxunebiduigman.supabase.co/storage/v1/object/public/ota/manifest.json";
-  const sb = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+/* ---------- firmware compare ---------- */
+function cmpSemver(a,b){ const pa=String(a).split('.').map(Number),pb=String(b).split('.').map(Number);
+  for(let i=0;i<3;i++){ const x=pa[i]||0,y=pb[i]||0; if(x!==y) return x<y?-1:1; } return 0; }
+async function fwCompare(){
+  try{
+    const m=await (await fetch(MANIFEST_URL+'?cb='+Date.now(),{cache:'no-store'})).json();
+    const cur=($('fwVal').textContent||'').trim();
+    if(!cur||cur==='—'){ $('fwFlag').textContent=''; return; }
+    const newer=cmpSemver(cur,m.version)<0;
+    $('fwFlag').textContent = newer ? `update → ${m.version}` : 'up to date';
+    $('fwFlag').style.color = newer ? 'var(--warn)' : 'var(--ok)';
+  }catch(e){ $('fwFlag').textContent=''; }
+}
 
-  const MQTT = {
-    host: "3614c4f5a4b94a56a45e17893c67c2d7.s1.eu.hivemq.cloud",
-    port: 8883,
-    user: "aug25",
-    pass: "f71pSt1cK",
-    cafile: "C:\\\\certs\\\\cacert.pem",
-    devId: "pump-1",
-    topicCmd: (id) => `pump/uv/cmd/${id}`
-  };
+/* ---------- auth ---------- */
+function showAuth(){ $('auth').style.display='block'; $('app').style.display='none'; }
+function showApp(){ $('auth').style.display='none'; $('app').style.display='block'; }
+async function refreshAuth(){
+  const { data:{session} } = await sb.auth.getSession();
+  if(session){ showApp(); await load(); await fwCompare(); }
+  else showAuth();
+}
 
-  // --- UI refs ---
-  const els = Object.fromEntries([
-    'auth','app','email','password','signin','authMsg','signout','range','refresh','status',
-    'rows','latest','count','signal','lastconn','lastseen','rssiNow','tempALatest','tempBLatest',
-    'fwCurrent','fwManifest','fwUpdateFlag','fwCheckBtn','fwForceBtn','fwMsg','fwCmdWrap','fwCmdText',
-    'events','schema'
-  ].map(id => [id, document.getElementById(id)]));
+/* ---------- wire up ---------- */
+$('signin').addEventListener('click', async ()=>{
+  $('authMsg').textContent='';
+  const { error } = await sb.auth.signInWithPassword({ email:$('email').value.trim(), password:$('password').value });
+  if(error){ $('authMsg').textContent=error.message; return; }
+  await refreshAuth();
+});
+$('password').addEventListener('keydown', e=>{ if(e.key==='Enter') $('signin').click(); });
+$('signout').addEventListener('click', async ()=>{ await sb.auth.signOut(); showAuth(); });
+$('range').addEventListener('change', load);
+$('stopAll').addEventListener('click', async ()=>{
+  if(!confirm('Turn OFF BOTH pumps now?')) return;
+  await sendControl({ch:1,state:'off'}); await sendControl({ch:2,state:'off'});
+});
+wireToggle('btnA',1,'Irrigation'); wireToggle('btnB',2,'House');
+$('fwCheckBtn').addEventListener('click', fwCompare);
+$('fwForceBtn').addEventListener('click', ()=> sendControl({action:'check_update'}));
 
-  function log(m){ els.events.textContent = `[${new Date().toLocaleTimeString()}] ${m}\n` + els.events.textContent; }
+// control availability note
+if(!CONTROL_ENDPOINT){ const n=$('ctrlNote'); n.style.display='block';
+  n.textContent='⚙️ Control buttons are inactive until the control endpoint is configured (see deploy checklist).'; }
 
-  // --- helpers ---
-  function parseRaw(row){
-    try{
-      if (typeof row.raw === 'string') return JSON.parse(row.raw);
-      if (row.raw && typeof row.raw === 'object') return row.raw;
-    }catch(_){}
-    return null;
-  }
+refreshAuth();
+setInterval(async ()=>{ const { data:{session} }=await sb.auth.getSession(); if(session){ await load(); await fwCompare(); } }, 10000);
 
-  function augmentRows(rows){
-    return rows.map(r=>{
-      const o = parseRaw(r) || {};
-      const a = { ...r };
-      a.$fw  = r.fw ?? o.fw ?? o.fw_version ?? null;
-      a.$ta  = r.temp_pump_a_c ?? o.temp_pump_a_c ?? r.temp_a ?? o.temp_a ?? r.temp_c ?? o.temp_c ?? null;
-      a.$tb  = r.temp_pump_b_c ?? o.temp_pump_b_c ?? r.temp_b ?? o.temp_b ?? null;
-      a.$uv  = r.uv_status ?? o.uv_status ?? r.status ?? o.status ?? null;
-      a.$rssi= r.rssi ?? o.rssi ?? r.wifi_rssi ?? o.wifi_rssi ?? null;
-      a.$ts  = r.ts ?? r.inserted_at ?? o.ts ?? o.time ?? null; // ISO8601
-      a.$dev = r.device_id ?? r.device ?? o.device_id ?? o.device ?? null;
-      return a;
-    });
-  }
-
-  function describeDetection(rows){
-    if (!rows.length){ els.schema.textContent='No rows found.'; return; }
-    const k = Object.keys(rows[0]).join(', ');
-    const s = augmentRows([rows[0]])[0];
-    els.schema.textContent =
-      `Resolved → ts:${s.$ts?'✓':'—'}, fw:${s.$fw?'✓':'—'}, A:${s.$ta!=null?'✓':'—'}, B:${s.$tb!=null?'✓':'—'}, rssi:${s.$rssi!=null?'✓':'—'}, status:${s.$uv?'✓':'—'}, device:${s.$dev?'✓':'—'} | Raw keys: ${k}`;
-  }
-
-  function rssiLabel(dbm){ if (dbm>=-60) return 'Excellent'; if (dbm>=-67) return 'Very good'; if (dbm>=-75) return 'Good'; if (dbm>=-82) return 'Fair'; if (dbm>=-90) return 'Poor'; return 'Very poor'; }
-
-  function hoursFromRangeValue(v){
-    if (v.endsWith('h')) return parseInt(v,10);
-    const d = parseInt(v,10);
-    return d * 24; // '3d','7d','30d','90d'
-  }
-
-  function chooseTimeUnit(hours){
-    return (hours <= 48) ? 'hour' : 'day';
-  }
-
-  function computeWindow(){
-    const hours = hoursFromRangeValue(els.range.value);
-    const toMs = Date.now(); // now (client)
-    const fromMs = toMs - hours * 3600 * 1000;
-    return { fromMs, toMs, hours };
-  }
-
-  function dedupeByTsDev(rows){
-    const map = new Map();
-    for (const r of rows){
-      const key = `${r.$ts}|${r.$dev||''}`;
-      if (!map.has(key)) map.set(key, r);
-    }
-    return Array.from(map.values());
-  }
-
-  // ---------- DESCENDING pagination (now → past) to keep newest data ----------
-  async function pageByFieldDesc(field, fromIso, toIso, pageSize=2000, hardCap=300000){
-    let all = [];
-    let cursor = toIso; // start at "now"
-    while (all.length < hardCap){
-      let q = sb.from('pump_readings')
-        .select('*')
-        .lte(field, cursor).gte(field, fromIso)
-        .order(field, { ascending: false })
-        .limit(pageSize);
-
-      const { data, error } = await q;
-      if (error) throw new Error(`${field} page error: ${error.message}`);
-
-      const batch = data || [];
-      if (!batch.length) break;
-
-      all.push(...batch);               // newest → older
-      const last = batch[batch.length - 1][field]; // oldest in this page
-      if (!last || last <= fromIso) break;
-      if (batch.length < pageSize) break;
-
-      // next page strictly older than "last"
-      cursor = last;
-      // ensure strict "older than"
-      // Supabase doesn't have "lt" chained after lte in the same call,
-      // but we can adjust cursor slightly by string compare margin isn't reliable.
-      // Simpler: rely on the next .lte(field, cursor) and server-side stable order; de-dupe later.
-    }
-    return all;
-  }
-
-  async function fetchWindowBothDesc(fromIso, toIso){
-    let a = [], b = [], via = [];
-    try { a = await pageByFieldDesc('ts', fromIso, toIso); via.push('ts'); } catch(e){ log(e.message); }
-    try { b = await pageByFieldDesc('inserted_at', fromIso, toIso); via.push('inserted_at'); } catch(e){ log(e.message); }
-
-    // Merge, de-dupe, filter strictly inside window, then ASC for chart
-    const merged = dedupeByTsDev(augmentRows(a).concat(augmentRows(b))).filter(r=>r.$ts);
-    const fromMs = new Date(fromIso).getTime();
-    const toMs   = new Date(toIso).getTime();
-    const inWin  = merged.filter(r => {
-      const t = new Date(r.$ts).getTime();
-      return Number.isFinite(t) && t >= fromMs && t <= toMs;
-    });
-    inWin.sort((x,y)=> new Date(x.$ts) - new Date(y.$ts)); // ascending
-    return { rows: inWin, via: via.join('+') || 'none' };
-  }
-
-  // ---------- ASCENDING pagination (oldest → newest) for chart and table ----------
-  async function fetchWindowAscByRange(fromIso, toIso, page=0, pageSize=1000) {
-    const rows = [];
-    let offset = page * pageSize;
-    for (;;) {
-      const start = offset;
-      const end   = offset + pageSize - 1;
-      const { data, error } = await sb
-        .from('pump_readings')
-        .select('*')
-        .gte('ts', fromIso)
-        .lte('ts', toIso)
-        .order('ts', { ascending: true })
-        .range(start, end);
-      if (error) throw new Error('range page: ' + error.message);
-      const batch = data || [];
-      if (!batch.length) break;
-      rows.push(...batch);
-      if (batch.length < pageSize) break;   // last page
-      offset += pageSize;
-      if (rows.length > 250000) break;      // safety hard-cap
-    }
-    // Augment & filter
-    const aug = augmentRows(rows).filter(r => r.$ts);
-    // Asc already; just return
-    return { rows: aug, via: 'range(ts,ASC)' };
-  }
-
-  // --- data load ---
-  let tempsChart = null;
-
-  async function load(){
-    const { data: { session } } = await sb.auth.getSession();
-    if (!session){
-      log('Not signed in.');
-      els.status.textContent = 'Not signed in.';
-      document.getElementById('auth').style.display = 'block';
-      document.getElementById('app').style.display  = 'none';
-      return;
-    }
-
-    const hours = hoursFromRangeValue(els.range.value);
-    const toMs = Date.now(); // exact current time
-    const fromMs = toMs - hours * 3600 * 1000;
-    const fromIso = new Date(fromMs).toISOString();
-    const toIso   = new Date(toMs).toISOString();
-    const unit    = chooseTimeUnit(hours);
-
-    els.status.textContent = `Loading… (${els.range.options[els.range.selectedIndex].text})`;
-    log(`Load start: ${fromIso} → ${toIso}`);
-
-    const { rows: rowsAllAsc, via } = await fetchWindowAscByRange(fromIso, toIso);
-
-    // Table: latest 200, newest-first
-    const rowsTable = rowsAllAsc.slice(-200).reverse();
-
-    // Schema/debug
-    describeDetection(rowsAllAsc.length ? [rowsAllAsc[0]] : []);
-    els.count.textContent = rowsTable.length;
-
-    // Latest badges
-    if (rowsTable.length){
-      const latest = rowsTable[0];
-      els.latest.textContent = latest.$uv || '—';
-      els.latest.className = 'pill ' + ((latest.$uv==='GREEN') ? 'green' : 'red');
-      els.tempALatest.textContent = (latest.$ta==null)?'—':(+latest.$ta).toFixed(2)+' °C';
-      els.tempBLatest.textContent = (latest.$tb==null)?'—':(+latest.$tb).toFixed(2)+' °C';
-      els.fwCurrent.textContent = latest.$fw || '—';
-
-      try{
-        const did = latest.$dev;
-        const { data: ds } = await sb.from('device_status')
-          .select('last_seen_ts,last_online_ts,online').eq('device_id', did).single();
-        if (ds){
-          els.lastconn.textContent = ds.last_online_ts ? new Date(ds.last_online_ts).toLocaleString() : (ds.online?'now':'—');
-          els.lastseen.textContent = ds.last_seen_ts ? new Date(ds.last_seen_ts).toLocaleString() : (ds.online?'now':'—');
-          const fresh = rowsTable.filter(r => r.$rssi!=null && (Date.now()-new Date(r.$ts).getTime())<=120000).slice(0,5);
-          if (fresh.length){
-            const avg = fresh.reduce((s,r)=>s+Number(r.$rssi),0)/fresh.length;
-            els.rssiNow.textContent = `${avg.toFixed(0)} dBm (${rssiLabel(avg)})`;
-          } else els.rssiNow.textContent = 'No signal';
-        }
-      }catch(e){ log('device_status lookup failed: ' + e.message); }
-    } else {
-      els.latest.textContent = '—'; els.latest.className='pill';
-      els.fwCurrent.textContent = '—'; els.rssiNow.textContent = '—';
-    }
-
-    // Table render
-    els.rows.innerHTML = '';
-    if (rowsTable.length){
-      for (const r of rowsTable){
-        const tr = document.createElement('tr');
-        tr.innerHTML = `
-          <td>${new Date(r.$ts).toISOString()}</td>
-          <td>${r.$dev ?? ''}</td>
-          <td><span class="pill ${(r.$uv==='GREEN')?'green':'red'}">${r.$uv ?? ''}</span></td>
-          <td>${r.$ta==null?'':Number(r.$ta).toFixed(2)}</td>
-          <td>${r.$tb==null?'':Number(r.$tb).toFixed(2)}</td>
-          <td>${r.$rssi ?? ''}</td>
-          <td class="mono">${r.$fw ?? ''}</td>
-        `;
-        els.rows.appendChild(tr);
-      }
-    } else {
-      const tr = document.createElement('tr');
-      tr.innerHTML = `<td colspan="7" style="text-align:center;color:#999;">No data for selected range.</td>`;
-      els.rows.appendChild(tr);
-    }
-
-    // Chart
-    try {
-      renderTempsChart(rowsAllAsc, fromMs, toMs, unit);
-    } catch(e) {
-      log('Chart render failed: ' + e.message);
-    }
-
-    // Staleness
-    if (rowsTable.length){
-      const ageMin = Math.floor((Date.now() - new Date(rowsTable[0].$ts).getTime())/60000);
-      const fresh = ageMin <= 10;
-      els.signal.textContent = fresh ? 'OK' : `STALE: ${ageMin}m`;
-      els.signal.className = 'pill ' + (fresh ? 'green' : 'red');
-    } else {
-      els.signal.textContent = 'NO DATA';
-      els.signal.className = 'pill red';
-    }
-
-    els.status.textContent = `Last updated: ${new Date().toLocaleTimeString()} • via: ${via}`;
-    log(`Load done: rows=${rowsAllAsc.length}, unit=${unit}`);
-  }
-
-  // --- chart (explicit [min,max] on both axes; decimation on) ---
-  function computeYRange(datasets){
-    const vals = [];
-    for (const arr of datasets){
-      for (const p of arr) if (p && Number.isFinite(p.y)) vals.push(p.y);
-    }
-    if (!vals.length) return null;
-    const min = Math.min(...vals), max = Math.max(...vals);
-    if (min === max) return { min: min - 1, max: max + 1 };
-    const pad = (max - min) * 0.05;
-    return { min: min - pad, max: max + pad };
-  }
-
-  // Removed duplicate declaration of tempsChart
-  function renderTempsChart(allAsc, fromMs, toMs, unit){
-    const A = allAsc
-      .filter(r => r.$ta!=null)
-      .map(r => ({ x: new Date(r.$ts).getTime(), y: Number(r.$ta) }))
-      .filter(p => Number.isFinite(p.x) && p.x>=fromMs && p.x<=toMs);
-
-    const B = allAsc
-      .filter(r => r.$tb!=null)
-      .map(r => ({ x: new Date(r.$ts).getTime(), y: Number(r.$tb) }))
-      .filter(p => Number.isFinite(p.x) && p.x>=fromMs && p.x<=toMs);
-
-    const yr = computeYRange([A,B]) || { min: undefined, max: undefined };
-    const ctx = document.getElementById('chartTemps').getContext('2d');
-    const ds = [
-      { data:A, label:'Temp A (°C)', spanGaps:true, pointRadius:0, borderWidth:2, parsing:false },
-      { data:B, label:'Temp B (°C)', spanGaps:true, pointRadius:0, borderWidth:2, parsing:false }
-    ];
-    // Enable decimation only if data is large
-    const enableDecim = (A.length + B.length) > 2000;
-    const opts = {
-      parsing:false,
-      animation:false,
-      normalized:true,
-      plugins:{
-        legend:{ display:true, position:'top' },
-        decimation:{ enabled: enableDecim, algorithm:'lttb', samples:1000 }
-      },
-      scales:{
-        x:{
-          type:'time',
-          time:{ unit },
-          min: fromMs,
-          max: toMs,
-          ticks:{ maxRotation:0 }
-        },
-        y:{
-          title:{ display:true, text:'°C' },
-          beginAtZero:false,
-          min: yr.min,
-          max: yr.max
-        }
-      }
-    };
-
-    const data = { datasets: ds };
-
-    if (!tempsChart){
-      tempsChart = new Chart(ctx, { type:'line', data, options:opts });
-    } else {
-      tempsChart.options.scales.x.min = fromMs;
-      tempsChart.options.scales.x.max = toMs;
-      tempsChart.options.scales.x.time.unit = unit;
-      tempsChart.options.scales.y.min = yr.min;
-      tempsChart.options.scales.y.max = yr.max;
-      tempsChart.data.datasets[0].data = ds[0].data;
-      tempsChart.data.datasets[1].data = ds[1].data;
-      tempsChart.options.plugins.decimation.enabled = enableDecim;
-      tempsChart.update('none');
-    }
-  }
-
-  // --- firmware/commands (unchanged) ---
-  function cmpSemver(a,b){ const pa=String(a).split('.').map(n=>parseInt(n,10)); const pb=String(b).split('.').map(n=>parseInt(n,10)); for(let i=0;i<3;i++){const x=pa[i]||0,y=pb[i]||0;if(x!==y)return x<y?-1:1;} return 0; }
-  async function fetchManifest(){ const url = MANIFEST_URL + '?cb=' + Date.now(); const res = await fetch(url,{cache:'no-store'}); if(!res.ok) throw new Error('manifest fetch '+res.status); return res.json(); }
-  async function refreshFirmwareCompare(){
-    els.fwMsg.textContent='Fetching manifest…'; els.fwCmdWrap.style.display='none';
-    try{
-      const m = await fetchManifest();
-      const mver = m.version || '—';
-      els.fwManifest.textContent = mver;
-
-      const cur = (els.fwCurrent.textContent||'').trim();
-      if (!cur || cur==='—' || !mver || mver==='—'){
-        els.fwUpdateFlag.textContent='—'; els.fwUpdateFlag.className='pill';
-        els.fwMsg.textContent = cur && cur!=='—' ? 'Manifest loaded.' : 'Manifest loaded; waiting for device FW…';
-        log('Manifest fetched, current FW ' + (cur && cur!=='—' ? cur : 'unknown') + '.');
-        return;
-      }
-      const newer = cmpSemver(cur, mver) < 0;
-      els.fwUpdateFlag.textContent = newer ? 'YES' : 'No';
-      els.fwUpdateFlag.className = 'pill ' + (newer ? 'red' : 'green');
-      els.fwMsg.textContent = newer ? 'New firmware available in manifest.' : 'Device is up to date.';
-      log(`Manifest compare: current=${cur}, manifest=${mver}, update=${newer?'YES':'No'}`);
-    }catch(e){
-      els.fwManifest.textContent='—'; els.fwUpdateFlag.textContent='—'; els.fwUpdateFlag.className='pill';
-      els.fwMsg.textContent='Manifest fetch failed.'; log('Manifest fetch failed: '+e.message);
-    }
-  }
-
-  function buildForceCheckCommand(){
-    const topic = MQTT.topicCmd(MQTT.devId);
-    return `"C:\\Program Files\\mosquitto\\mosquitto_pub.exe" -h ${MQTT.host} -p ${MQTT.port} -V mqttv311 --cafile "${MQTT.cafile}" -u ${MQTT.user} -P ${MQTT.pass} -t "${topic}" -m "{\\"cmd\\":\\"check_update\\"}"`;
-  }
-  async function copyForceCheck(){
-    const cmd = buildForceCheckCommand();
-    try{ await navigator.clipboard.writeText(cmd); }catch(_){}
-    els.fwCmdText.textContent = cmd;
-    els.fwCmdWrap.style.display = 'block';
-    els.fwMsg.textContent = 'Command copied. Paste into Command Prompt.';
-    log('Force-check command copied.');
-  }
-
-  // --- auth & wiring ---
-  async function refreshAuthUI(){
-    const { data: { session } } = await sb.auth.getSession();
-    const authed = !!session;
-    document.getElementById('auth').style.display = authed ? 'none' : 'block';
-    document.getElementById('app').style.display  = authed ? 'block' : 'none';
-    if (authed){ await load(); await refreshFirmwareCompare(); }
-  }
-
-  document.getElementById('refresh').addEventListener('click', async ()=>{ await load(); await refreshFirmwareCompare(); });
-  document.getElementById('range').addEventListener('change', async ()=>{ await load(); });
-  document.getElementById('fwCheckBtn').addEventListener('click', refreshFirmwareCompare);
-  document.getElementById('fwForceBtn').addEventListener('click', copyForceCheck);
-  document.getElementById('signin').addEventListener('click', async ()=>{
-    document.getElementById('authMsg').textContent = '';
-    const { error } = await sb.auth.signInWithPassword({
-      email: document.getElementById('email').value.trim(),
-      password: document.getElementById('password').value
-    });
-    if (error){ document.getElementById('authMsg').textContent = error.message; return; }
-    await refreshAuthUI();
-  });
-  document.getElementById('signout').addEventListener('click', async ()=>{ await sb.auth.signOut(); await refreshAuthUI(); });
-
-  // start + periodic refresh (10s)
-  refreshAuthUI();
-  setInterval(async ()=>{
-    const { data:{session} } = await sb.auth.getSession();
-    if (session) { await load(); await refreshFirmwareCompare(); }
-  }, 10000);
-  </script>
+if('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(()=>{});
+</script>
 </body>
 </html>
